@@ -340,7 +340,7 @@ class GameActivity : AppCompatActivity() {
         if (vulkanInfo.isNotEmpty()) sb.append("Vulkan: $vulkanInfo")
 
         statsView.text = sb.toString()
-
+    }
 
     private fun getCpuUsage(): Int {
         return try {
