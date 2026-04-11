@@ -1,0 +1,3 @@
+tar: Skipping to next header
+tar: A lone zero block at 1306864
+tar: Exiting with failure status due to previous errors

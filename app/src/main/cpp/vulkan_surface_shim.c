@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <stdarg.h>
@@ -89,19 +90,148 @@ static VkInstance g_instance = VK_NULL_HANDLE;
 static ANativeWindow* g_native_window = NULL;
 static int g_window_loaded = 0;
 
+// get GPU info using temporary EGL context
+// source: https://stackoverflow.com/questions/15804365/is-there-any-way-to-get-gpu-information
+static int is_adreno_gpu(void) {
+    typedef void* EGLDisplay;
+    typedef void* EGLConfig;
+    typedef void* EGLSurface;
+    typedef void* EGLContext;
+    typedef unsigned int EGLBoolean;
+    typedef int EGLint;
+
+    void* libEGL = dlopen("libEGL.so", RTLD_NOW);
+    void* libGLES = dlopen("libGLESv2.so", RTLD_NOW);
+    if (!libEGL || !libGLES) {
+        LOGI("shim: EGL or GLES not available! system Vulkan will be used.");
+        if (libEGL) dlclose(libEGL);
+        if (libGLES) dlclose(libGLES);
+        return 0;
+    }
+
+    typedef EGLDisplay (*PFN_eglGetDisplay)(void*);
+    typedef EGLBoolean (*PFN_eglInitialize)(EGLDisplay, EGLint*, EGLint*);
+    typedef EGLBoolean (*PFN_eglChooseConfig)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*);
+    typedef EGLSurface (*PFN_eglCreatePbufferSurface)(EGLDisplay, EGLConfig, const EGLint*);
+    typedef EGLContext (*PFN_eglCreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint*);
+    typedef EGLBoolean (*PFN_eglMakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+    typedef EGLBoolean (*PFN_eglDestroyContext)(EGLDisplay, EGLContext);
+    typedef EGLBoolean (*PFN_eglDestroySurface)(EGLDisplay, EGLSurface);
+    typedef EGLBoolean (*PFN_eglTerminate)(EGLDisplay);
+    typedef const unsigned char* (*PFN_glGetString)(unsigned int);
+
+    PFN_eglGetDisplay pfn_eglGetDisplay = (PFN_eglGetDisplay)dlsym(libEGL, "eglGetDisplay");
+    PFN_eglInitialize pfn_eglInitialize = (PFN_eglInitialize)dlsym(libEGL, "eglInitialize");
+    PFN_eglChooseConfig pfn_eglChooseConfig = (PFN_eglChooseConfig)dlsym(libEGL, "eglChooseConfig");
+    PFN_eglCreatePbufferSurface pfn_eglCreatePbufferSurface = (PFN_eglCreatePbufferSurface)dlsym(libEGL, "eglCreatePbufferSurface");
+    PFN_eglCreateContext pfn_eglCreateContext = (PFN_eglCreateContext)dlsym(libEGL, "eglCreateContext");
+    PFN_eglMakeCurrent pfn_eglMakeCurrent = (PFN_eglMakeCurrent)dlsym(libEGL, "eglMakeCurrent");
+    PFN_eglDestroyContext pfn_eglDestroyContext = (PFN_eglDestroyContext)dlsym(libEGL, "eglDestroyContext");
+    PFN_eglDestroySurface pfn_eglDestroySurface = (PFN_eglDestroySurface)dlsym(libEGL, "eglDestroySurface");
+    PFN_eglTerminate pfn_eglTerminate = (PFN_eglTerminate)dlsym(libEGL, "eglTerminate");
+    PFN_glGetString pfn_glGetString = (PFN_glGetString)dlsym(libGLES, "glGetString");
+
+    if (!pfn_eglGetDisplay || !pfn_eglInitialize || !pfn_eglChooseConfig ||
+        !pfn_eglCreatePbufferSurface || !pfn_eglCreateContext || !pfn_eglMakeCurrent ||
+        !pfn_glGetString) {
+        LOGI("shim: EGL symbols not available! system Vulkan will be used.");
+        dlclose(libEGL); dlclose(libGLES);
+        return 0;
+    }
+
+    #define EGL_DEFAULT_DISPLAY ((void*)0)
+    #define EGL_NO_CONTEXT ((EGLContext)0)
+    #define EGL_NO_SURFACE ((EGLSurface)0)
+    #define EGL_NO_DISPLAY ((EGLDisplay)0)
+    #define MY_EGL_RENDERABLE_TYPE 0x3040
+    #define MY_EGL_OPENGL_ES2_BIT 0x0004
+    #define MY_EGL_SURFACE_TYPE 0x3033
+    #define MY_EGL_PBUFFER_BIT 0x0001
+    #define MY_EGL_NONE 0x3038
+    #define MY_EGL_WIDTH 0x3057
+    #define MY_EGL_HEIGHT 0x3056
+    #define MY_EGL_CONTEXT_CLIENT_VERSION 0x3098
+    #define MY_GL_RENDERER 0x1F01
+
+    int result = 0;
+    EGLDisplay display = pfn_eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (display == EGL_NO_DISPLAY) { dlclose(libEGL); dlclose(libGLES); return 0; }
+
+    EGLint major, minor;
+    if (!pfn_eglInitialize(display, &major, &minor)) { dlclose(libEGL); dlclose(libGLES); return 0; }
+
+    EGLint configAttribs[] = {
+        MY_EGL_RENDERABLE_TYPE, MY_EGL_OPENGL_ES2_BIT,
+        MY_EGL_SURFACE_TYPE, MY_EGL_PBUFFER_BIT,
+        MY_EGL_NONE
+    };
+    EGLConfig config;
+    EGLint numConfigs;
+    if (!pfn_eglChooseConfig(display, configAttribs, &config, 1, &numConfigs) || numConfigs == 0) {
+        pfn_eglTerminate(display); dlclose(libEGL); dlclose(libGLES); return 0;
+    }
+
+    EGLint pbufAttribs[] = { MY_EGL_WIDTH, 1, MY_EGL_HEIGHT, 1, MY_EGL_NONE };
+    EGLSurface surface = pfn_eglCreatePbufferSurface(display, config, pbufAttribs);
+    if (surface == EGL_NO_SURFACE) { pfn_eglTerminate(display); dlclose(libEGL); dlclose(libGLES); return 0; }
+
+    EGLint ctxAttribs[] = { MY_EGL_CONTEXT_CLIENT_VERSION, 2, MY_EGL_NONE };
+    EGLContext context = pfn_eglCreateContext(display, config, EGL_NO_CONTEXT, ctxAttribs);
+    if (context == EGL_NO_CONTEXT) {
+        pfn_eglDestroySurface(display, surface);
+        pfn_eglTerminate(display); dlclose(libEGL); dlclose(libGLES); return 0;
+    }
+
+    pfn_eglMakeCurrent(display, surface, surface, context);
+    const char* renderer = (const char*)pfn_glGetString(MY_GL_RENDERER);
+    char renderer_copy[128] = "";
+    if (renderer) {
+        snprintf(renderer_copy, sizeof(renderer_copy), "%s", renderer);
+        LOGI("shim: GL_RENDERER = %s", renderer_copy);
+        if (strcasestr(renderer_copy, "adreno")) result = 1;
+    }
+
+    pfn_eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    pfn_eglDestroyContext(display, context);
+    pfn_eglDestroySurface(display, surface);
+    pfn_eglTerminate(display);
+    dlclose(libEGL);
+    dlclose(libGLES);
+
+    LOGI("shim: using GPU: %s (%s)", renderer_copy[0] ? renderer_copy : "unknown",
+         result ? "Adreno" : "non-Adreno");
+    return result;
+}
+
 static void load_real_vulkan(void) {
     if (g_real_vulkan) return;
 
-    // path is mapped
-    dlopen("/usr/lib/arm64-native/libc++_shared.so", RTLD_NOW | RTLD_GLOBAL);
-    dlopen("/usr/lib/arm64-native/libdrm.so.2", RTLD_NOW | RTLD_GLOBAL);
+    int adreno = is_adreno_gpu();
 
-    g_real_vulkan = dlopen("/usr/lib/arm64-native/libvulkan_freedreno.so", RTLD_NOW | RTLD_LOCAL);
-    if (g_real_vulkan) {
-        LOGI("shim: Turnip loaded");
+    if (adreno) {
+        // use Turnip for Adreno, if it doesnt work, fallback to system vulkan
+        dlopen("/usr/lib/arm64-native/libc++_shared.so", RTLD_NOW | RTLD_GLOBAL);
+        dlopen("/usr/lib/arm64-native/libdrm.so.2", RTLD_NOW | RTLD_GLOBAL);
+
+        g_real_vulkan = dlopen("/usr/lib/arm64-native/libvulkan_freedreno.so", RTLD_NOW | RTLD_LOCAL);
+        if (g_real_vulkan) {
+            LOGI("shim: Turnip loaded!");
+        } else {
+            LOGI("shim: Turnip load failed! %s, system Vulkan will be used.", dlerror());
+        }
     } else {
-        LOGE("shim: Turnip load failed: %s", dlerror());
-        return;
+        LOGI("shim: non-Adreno GPU detected! system Vulkan will be used.");
+    }
+
+    if (!g_real_vulkan) {
+        // fall back to system Vulkan driver
+        g_real_vulkan = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (g_real_vulkan) {
+            LOGI("shim: system Vulkan driver loaded");
+        } else {
+            LOGE("shim: system Vulkan driver load failed: %s", dlerror());
+            return;
+        }
     }
 
     real_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)

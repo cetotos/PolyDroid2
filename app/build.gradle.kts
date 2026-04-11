@@ -41,7 +41,7 @@ android {
         }
     }
 
-    androidResources { noCompress += listOf("tar.gz", "tar.xz", "txz") }
+    androidResources { noCompress += listOf("tar.gz", "tar.xz", "txz", "xz") }
     buildFeatures { aidl = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_11; targetCompatibility = JavaVersion.VERSION_11 }
     kotlinOptions { jvmTarget = "11" }
