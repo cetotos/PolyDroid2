@@ -111,7 +111,6 @@ class GameActivity : AppCompatActivity() {
 
         // Vulkan SurfaceView
         vulkanSurface = SurfaceView(this)
-        vulkanSurface.setZOrderMediaOverlay(true)
 
         vulkanSurface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
@@ -264,8 +263,6 @@ class GameActivity : AppCompatActivity() {
                 appendLog("Failed to connect LorieView to X server after 5s!")
             }
 
-            // wait for compositor before launching Box64
-            while (!vulkanSurfaceReady) Thread.sleep(100)
             appendLog("Launching Box64...")
             try {
                 Box64Launcher.launch(this, tmpDir, fullArgs, renderWidth, renderHeight) { line ->
@@ -370,32 +367,31 @@ class GameActivity : AppCompatActivity() {
     }
 
     private fun getGpuUsage(): Int {
-        // GPU info from Adreno
-        try {
+        return try {
             val text = File("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage").readText().trim()
-            return text.replace("%", "").trim().toInt()
-        } catch (_: Exception) {}
-        try {
-            val parts = File("/sys/class/kgsl/kgsl-3d0/gpubusy").readText().trim()
-                .split("\\s+".toRegex())
-            if (parts.size >= 2) {
-                val busy = parts[0].toLong()
-                val total = parts[1].toLong()
-                if (total > 0) return (busy * 100 / total).toInt()
-            }
-        } catch (_: Exception) {}
-        // GPU info from Mali
-        try {
-            val text = File("/sys/class/misc/mali0/device/utilization").readText().trim()
-            return text.toInt() * 100 / 256
-        } catch (_: Exception) {}
-        try {
-            val text = File("/sys/class/misc/mali0/device/gpu_busy").readText().trim()
-            return text.toInt()
-        } catch (_: Exception) {}
-        return -1
+            text.replace("%", "").trim().toInt()
+        } catch (_: Exception) {
+            try {
+                val parts = File("/sys/class/kgsl/kgsl-3d0/gpubusy").readText().trim()
+                    .split("\\s+".toRegex())
+                if (parts.size >= 2) {
+                    val busy = parts[0].toLong()
+                    val total = parts[1].toLong()
+                    if (total > 0) (busy * 100 / total).toInt() else -1
+                } else -1
+            } catch (_: Exception) { -1 }
+        }
     }
 
+    private fun getGpuFreqMHz(): Int {
+        return try {
+            (File("/sys/class/kgsl/kgsl-3d0/gpuclk").readText().trim().toLong() / 1_000_000).toInt()
+        } catch (_: Exception) {
+            try {
+                (File("/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq").readText().trim().toLong() / 1_000_000).toInt()
+            } catch (_: Exception) { -1 }
+        }
+    }
 
     private fun getCpuTemp(): Int {
         for (i in 0..30) {
@@ -413,9 +409,8 @@ class GameActivity : AppCompatActivity() {
     private fun getGpuTemp(): Int {
         for (i in 0..30) {
             try {
-                // ive had issues with this not working on older devices, but it usually works
                 val type = File("/sys/class/thermal/thermal_zone$i/type").readText().trim().lowercase()
-                if (type.contains("gpu") || type.contains("gpuss") || type.contains("mali")) {
+                if (type.contains("gpu") || type.contains("gpuss")) {
                     val raw = File("/sys/class/thermal/thermal_zone$i/temp").readText().trim().toInt()
                     return if (raw > 1000) raw / 1000 else raw
                 }

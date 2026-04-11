@@ -103,32 +103,23 @@ object Box64Launcher {
             }
         }
 
-        // detect GPU vendor for driver selection
-        val isAdreno = isAdrenoGpu()
-        Log.i(TAG, "isAdreno=$isAdreno")
-
-        // deploy Turnip if adreno
         val arm64NativeDir = File("$rootPath/usr/lib/arm64-native")
         arm64NativeDir.mkdirs()
-        if (isAdreno) {
+        for (lib in listOf("libvulkan_freedreno.so", "libc++_shared.so", "libdrm.so.2")) {
+            val dest = File(arm64NativeDir, lib)
             try {
-                for (lib in listOf("libvulkan_freedreno.so", "libc++_shared.so", "libdrm.so.2")) {
-                    ctx.assets.open("turnip/$lib").use { input ->
-                        val dest = File(arm64NativeDir, lib)
-                        dest.outputStream().use { output -> input.copyTo(output) }
-                        dest.setReadable(true, false)
-                        dest.setExecutable(true, false)
-                    }
+                ctx.assets.open("turnip/$lib").use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
                 }
-                Log.i(TAG, "Deployed Turnip to arm64-native/")
-            } catch (e: Exception) {
-                Log.w(TAG, "Turnip deploy failed! system Vulkan will be used. ${e.message}")
-            }
+            } catch (_: Exception) { }
+            dest.setReadable(true, false)
+            dest.setExecutable(true, false)
+        }
 
-            // write Turnip ICD JSON so the vulkan loader finds it
-            val icdDir = File("$rootPath/usr/share/vulkan/icd.d")
-            icdDir.mkdirs()
-            File(icdDir, "freedreno_icd.aarch64.json").writeText("""{
+        // write Turnip ICD JSON so the vulkan loader finds it
+        val icdDir = File("$rootPath/usr/share/vulkan/icd.d")
+        icdDir.mkdirs()
+        File(icdDir, "freedreno_icd.aarch64.json").writeText("""{
     "file_format_version": "1.0.0",
     "ICD": {
         "library_path": "$rootPath/usr/lib/arm64-native/libvulkan_freedreno.so",
@@ -136,9 +127,6 @@ object Box64Launcher {
     }
 }
 """)
-        } else {
-            Log.i(TAG, "non-adreno GPU detected, skipping Turnip deployment and using system Vulkan")
-        }
 
         val xvfbMarker = File("$rootPath/usr/bin/Xvfb")
         if (!xvfbMarker.exists()) {
@@ -310,9 +298,7 @@ object Box64Launcher {
             put("XKB_CONFIG_ROOT", "$rootPath/usr/share/X11/xkb")
             put("XKB_CONFIG_EXTRA_PATH", "$rootPath/usr/share/X11/xkb")
             put("LD_LIBRARY_PATH", "$rootPath/usr/lib/arm64-native:$nativeDir:/system/lib64")
-            if (isAdreno) {
-                put("VK_ICD_FILENAMES", "$rootPath/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json")
-            }
+            put("VK_ICD_FILENAMES", "$rootPath/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json")
             put("MESA_VK_WSI_PRESENT_MODE", "mailbox")
             put("BOX64_LD_LIBRARY_PATH",
                 "$rootPath/polytoria:" +
@@ -448,58 +434,6 @@ exec "$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -for
     fun stop() {
         process?.destroy()
         process = null
-    }
-
-    private fun isAdrenoGpu(): Boolean {
-        val renderer = queryGpuRenderer()
-        Log.i(TAG, "GL_RENDERER: $renderer")
-        return renderer.contains("adreno", ignoreCase = true)
-    }
-
-    private fun queryGpuRenderer(): String {
-        // get GPU info using temporary EGL context (like vulkan_surface_shim.c does)
-        val eglDisplay = android.opengl.EGL14.eglGetDisplay(android.opengl.EGL14.EGL_DEFAULT_DISPLAY)
-        if (eglDisplay == android.opengl.EGL14.EGL_NO_DISPLAY) return ""
-        val major = IntArray(1)
-        val minor = IntArray(1)
-        if (!android.opengl.EGL14.eglInitialize(eglDisplay, major, 0, minor, 0)) return ""
-        try {
-            val configAttribs = intArrayOf(
-                android.opengl.EGL14.EGL_RENDERABLE_TYPE, android.opengl.EGL14.EGL_OPENGL_ES2_BIT,
-                android.opengl.EGL14.EGL_SURFACE_TYPE, android.opengl.EGL14.EGL_PBUFFER_BIT,
-                android.opengl.EGL14.EGL_NONE
-            )
-            val configs = arrayOfNulls<android.opengl.EGLConfig>(1)
-            val numConfigs = IntArray(1)
-            if (!android.opengl.EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)
-                || numConfigs[0] == 0) return ""
-            val config = configs[0]!!
-            val pbufAttribs = intArrayOf(
-                android.opengl.EGL14.EGL_WIDTH, 1,
-                android.opengl.EGL14.EGL_HEIGHT, 1,
-                android.opengl.EGL14.EGL_NONE
-            )
-            val surface = android.opengl.EGL14.eglCreatePbufferSurface(eglDisplay, config, pbufAttribs, 0)
-            if (surface == android.opengl.EGL14.EGL_NO_SURFACE) return ""
-            val ctxAttribs = intArrayOf(
-                android.opengl.EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
-                android.opengl.EGL14.EGL_NONE
-            )
-            val context = android.opengl.EGL14.eglCreateContext(eglDisplay, config, android.opengl.EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
-            if (context == android.opengl.EGL14.EGL_NO_CONTEXT) {
-                android.opengl.EGL14.eglDestroySurface(eglDisplay, surface)
-                return ""
-            }
-            android.opengl.EGL14.eglMakeCurrent(eglDisplay, surface, surface, context)
-            val renderer = android.opengl.GLES20.glGetString(android.opengl.GLES20.GL_RENDERER) ?: ""
-            android.opengl.EGL14.eglMakeCurrent(eglDisplay, android.opengl.EGL14.EGL_NO_SURFACE,
-                android.opengl.EGL14.EGL_NO_SURFACE, android.opengl.EGL14.EGL_NO_CONTEXT)
-            android.opengl.EGL14.eglDestroyContext(eglDisplay, context)
-            android.opengl.EGL14.eglDestroySurface(eglDisplay, surface)
-            return renderer
-        } finally {
-            android.opengl.EGL14.eglTerminate(eglDisplay)
-        }
     }
 
     private fun getSystemDnsServers(ctx: Context): List<String> {

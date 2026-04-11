@@ -93,7 +93,7 @@ static void* bridge_conn_thread(void* arg) {
 
     // retry (67 boi :joy: :joy😂)
     int connected = 0;
-    for (int attempt = 0; attempt < 67; attempt++) {
+    for (int attempt = 0; attempt < 50; attempt++) {
         if (connect(server_fd, (struct sockaddr*)&addr, addrlen) == 0) {
             connected = 1;
             break;
@@ -105,7 +105,7 @@ static void* bridge_conn_thread(void* arg) {
         if (attempt == 0) {
             LOGI("bridge: waiting for Lorie socket @%s ...", g_real_path);
         }
-        usleep(100000); // 100 ms
+        usleep(100000);
     }
     if (!connected) {
         LOGE("bridge: connect to @%s failed after retries: %s", g_real_path, strerror(errno));
@@ -185,38 +185,50 @@ static void* bridge_listen_thread(void* arg) {
     return NULL;
 }
 
-
 // ---------------------- compositor (this is the bad part)
+#include <android/hardware_buffer.h>
 #include <android/rect.h>
+
 typedef struct ASurfaceControl ASurfaceControl;
 typedef struct ASurfaceTransaction ASurfaceTransaction;
 
-ASurfaceControl* ASurfaceControl_createFromWindow(ANativeWindow* parent, const char* name);
+#define ASURFACE_TRANSACTION_VISIBILITY_SHOW 1
+
+ASurfaceControl* ASurfaceControl_createFromWindow(ANativeWindow* parent, const char* debug_name);
+void ASurfaceControl_release(ASurfaceControl* surface_control);
+
 ASurfaceTransaction* ASurfaceTransaction_create(void);
-void ASurfaceTransaction_apply(ASurfaceTransaction* txn);
-void ASurfaceTransaction_delete(ASurfaceTransaction* txn);
-void ASurfaceTransaction_setVisibility(ASurfaceTransaction* txn, ASurfaceControl* sc, int8_t visibility);
-void ASurfaceTransaction_setZOrder(ASurfaceTransaction* txn, ASurfaceControl* sc, int32_t z);
-void ASurfaceTransaction_setBuffer(ASurfaceTransaction* txn, ASurfaceControl* sc, AHardwareBuffer* buf, int fence);
-void ASurfaceTransaction_setGeometry(ASurfaceTransaction* txn, ASurfaceControl* sc, const ARect* src, const ARect* dst, int32_t transform);
-
-#define ASURFACE_TRANSACTION_VISIBILITY_SHOW 0
-#define ANATIVEWINDOW_TRANSFORM_IDENTITY 0
-#include <android/hardware_buffer.h>
-
+void ASurfaceTransaction_delete(ASurfaceTransaction* transaction);
+void ASurfaceTransaction_apply(ASurfaceTransaction* transaction);
+void ASurfaceTransaction_setVisibility(ASurfaceTransaction* transaction,
+                                       ASurfaceControl* surface_control,
+                                       int8_t visibility);
+void ASurfaceTransaction_setZOrder(ASurfaceTransaction* transaction,
+                                   ASurfaceControl* surface_control,
+                                   int32_t z_order);
+void ASurfaceTransaction_setBuffer(ASurfaceTransaction* transaction,
+                                   ASurfaceControl* surface_control,
+                                   AHardwareBuffer* buffer,
+                                   int acquire_fence_fd);
+void ASurfaceTransaction_setGeometry(ASurfaceTransaction* transaction,
+                                     ASurfaceControl* surface_control,
+                                     const ARect* source,
+                                     const ARect* destination,
+                                     int32_t transform);
 
 typedef struct native_handle {
     int version;
     int numFds;
+    int numInts;
     int data[0];
 } native_handle_t;
 
-typedef const native_handle_t* (*PFN_AHardwareBuffer_getNativeHandle)(const AHardwareBuffer* buffer);
+typedef const native_handle_t* (*PFN_AHardwareBuffer_getNativeHandle)(
+    const AHardwareBuffer* buffer);
 
 static int g_compositor_fd = -1;
 static ASurfaceControl* g_surface_ctl = NULL;
 static ANativeWindow* g_compositor_win = NULL;
-
 
 #define COMPOSITOR_MAX_BUFFERS 4
 static AHardwareBuffer* g_comp_ahbs[COMPOSITOR_MAX_BUFFERS];
@@ -224,16 +236,16 @@ static uint32_t g_comp_ahb_count = 0;
 
 static void* compositor_thread(void* arg) {
     (void)arg;
+
     pid_t tid = (pid_t)syscall(SYS_gettid);
     if (setpriority(PRIO_PROCESS, tid, -6) == 0) {
-       // LOGI("compositor: thread priority set to nice -6 (tid=%d)", tid);
+        LOGI("compositor: thread priority set to nice -6 (tid=%d)", tid);
     } else {
-       // LOGI("compositor: setpriority failed: %s (non-fatal)", strerror(errno));
+        LOGI("compositor: setpriority failed: %s (non-fatal)", strerror(errno));
     }
 
-
     while (1) {
-        LOGI("compositor: waiting for Box64 connection on @polydroid_compositor");
+        LOGI("compositor: waiting for Box64 connection on @polydroid_frame_bridge");
 
         int client_fd = accept(g_compositor_fd, NULL, NULL);
         if (client_fd < 0) {
@@ -264,27 +276,28 @@ static void* compositor_thread(void* arg) {
                 .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
                          AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                          AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY |
-                         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, // this might be slow, but it is required. without it the format is broken.
+                         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
                 .stride = 0,
                 .rfu0 = 0,
                 .rfu1 = 0,
             };
             int ret = AHardwareBuffer_allocate(&desc, &g_comp_ahbs[i]);
             if (ret != 0) {
-                // LOGE("compositor: AHardwareBuffer_allocate[%u] failed: %d", i, ret);
+                LOGE("compositor: AHardwareBuffer_allocate[%u] failed: %d", i, ret);
                 alloc_failed = 1;
                 break;
             }
+
             ret = AHardwareBuffer_sendHandleToUnixSocket(g_comp_ahbs[i], client_fd);
             if (ret != 0) {
-                // LOGE("compositor: AHardwareBuffer_sendHandleToUnixSocket[%u] failed: %d", i, ret);
+                LOGE("compositor: AHardwareBuffer_sendHandleToUnixSocket[%u] failed: %d", i, ret);
                 alloc_failed = 1;
                 break;
             }
 
             AHardwareBuffer_Desc actual_desc;
             AHardwareBuffer_describe(g_comp_ahbs[i], &actual_desc);
-            // LOGI("compositor: sent AHB[%u] stride=%u (linear for SurfaceFlinger)", i, actual_desc.stride);
+            LOGI("compositor: sent AHB[%u] stride=%u (linear for SurfaceFlinger)", i, actual_desc.stride);
         }
         g_comp_ahb_count = count;
 
@@ -302,10 +315,12 @@ static void* compositor_thread(void* arg) {
 
         uint8_t ready = 'R';
         send(client_fd, &ready, 1, 0);
-        LOGI("compositor: ready!");
+        LOGI("compositor: all buffers sent, ready for frames");
+
         if (!g_surface_ctl) {
             g_surface_ctl = ASurfaceControl_createFromWindow(g_compositor_win, "polydroid_frame");
             if (!g_surface_ctl) {
+                LOGE("compositor: ASurfaceControl_createFromWindow failed");
                 close(client_fd);
                 for (uint32_t i = 0; i < g_comp_ahb_count; i++) {
                     if (g_comp_ahbs[i]) { AHardwareBuffer_release(g_comp_ahbs[i]); g_comp_ahbs[i] = NULL; }
@@ -324,7 +339,6 @@ static void* compositor_thread(void* arg) {
         int32_t screen_w = ANativeWindow_getWidth(g_compositor_win);
         int32_t screen_h = ANativeWindow_getHeight(g_compositor_win);
         LOGI("compositor: presenting on %dx%d surface", screen_w, screen_h);
-
 
         {
             struct { char magic[4]; char gpu_name[64]; uint32_t api_ver; uint32_t drv_ver; } meta;
@@ -351,11 +365,15 @@ static void* compositor_thread(void* arg) {
         struct timespec fps_start;
         clock_gettime(CLOCK_MONOTONIC, &fps_start);
         int fps_frame_counter = 0;
+
         ARect src = {0, 0, (int32_t)width, (int32_t)height};
         ARect dst = {0, 0, screen_w, screen_h};
+        int geometry_set = 0;
+
+        txn = ASurfaceTransaction_create();
 
         while (1) {
-            uint32_t msg[2]; // { image_index, unity_fps }
+            uint32_t msg[2];
             n = recv(client_fd, msg, sizeof(msg), MSG_WAITALL);
             if (n != sizeof(msg)) break;
             uint32_t img_idx = msg[0];
@@ -363,12 +381,14 @@ static void* compositor_thread(void* arg) {
             if (img_idx >= g_comp_ahb_count) continue;
 
             AHardwareBuffer* ahb = g_comp_ahbs[img_idx];
-            txn = ASurfaceTransaction_create();
+
             ASurfaceTransaction_setBuffer(txn, g_surface_ctl, ahb, -1);
-            ASurfaceTransaction_setGeometry(txn, g_surface_ctl, &src, &dst,
-                                            ANATIVEWINDOW_TRANSFORM_IDENTITY);
+            if (!geometry_set) {
+                ASurfaceTransaction_setGeometry(txn, g_surface_ctl, &src, &dst,
+                                                ANATIVEWINDOW_TRANSFORM_IDENTITY);
+                geometry_set = 1;
+            }
             ASurfaceTransaction_apply(txn);
-            ASurfaceTransaction_delete(txn);
 
             frame_count++;
             fps_frame_counter++;
@@ -377,10 +397,10 @@ static void* compositor_thread(void* arg) {
             // calculate FPS
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
-            double elapsed = (now.tv_sec - fps_start.tv_sec) +
-                             (now.tv_nsec - fps_start.tv_nsec) / 1e9;
-            if (elapsed >= 1.0) {
-                int fps = (int)(fps_frame_counter / elapsed + 0.5);
+            long elapsed_ns = (now.tv_sec - fps_start.tv_sec) * 1000000000L +
+                              (now.tv_nsec - fps_start.tv_nsec);
+            if (elapsed_ns >= 1000000000L) {
+                int fps = (int)((long long)fps_frame_counter * 1000000000LL / elapsed_ns);
                 atomic_store(&g_comp_fps, fps);
                 fps_frame_counter = 0;
                 fps_start = now;
@@ -388,10 +408,14 @@ static void* compositor_thread(void* arg) {
 
             if (frame_count == 1) {
                 LOGI("compositor: first frame presented (idx=%u)", img_idx);
+            } else if (frame_count % 3000 == 0) {
+                LOGI("compositor: %d frames presented", frame_count);
             }
         }
 
-        LOGI("compositor: client disconnected after %d frames, waiting for reconnect", frame_count);
+        ASurfaceTransaction_delete(txn);
+
+        LOGI("compositor: client disconnected after %d frames, awaiting reconnect", frame_count);
         close(client_fd);
 
         txn = ASurfaceTransaction_create();
@@ -407,7 +431,6 @@ static void* compositor_thread(void* arg) {
         }
         g_comp_ahb_count = 0;
     }
-    return NULL;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -435,15 +458,17 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartFrameCompositor(
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     addr.sun_path[0] = '\0';
-    const char* name = "polydroid_compositor";
+    const char* name = "polydroid_frame_bridge";
     strncpy(addr.sun_path + 1, name, sizeof(addr.sun_path) - 2);
     socklen_t addrlen = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name);
 
     if (bind(g_compositor_fd, (struct sockaddr*)&addr, addrlen) < 0) {
+        LOGE("compositor: bind @%s: %s, retrying...", name, strerror(errno));
         close(g_compositor_fd);
         g_compositor_fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (g_compositor_fd < 0 ||
             bind(g_compositor_fd, (struct sockaddr*)&addr, addrlen) < 0) {
+            LOGE("compositor: bind @%s: %s (retry failed)", name, strerror(errno));
             if (g_compositor_fd >= 0) close(g_compositor_fd);
             g_compositor_fd = -1;
             return JNI_FALSE;
@@ -455,6 +480,8 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartFrameCompositor(
         g_compositor_fd = -1;
         return JNI_FALSE;
     }
+
+    LOGI("compositor: listening on @%s", name);
 
     pthread_t t;
     pthread_create(&t, NULL, compositor_thread, NULL);
@@ -529,13 +556,16 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartX11Bridge(
         strncpy(fs_addr.sun_path, fs_path, sizeof(fs_addr.sun_path) - 1);
 
         if (bind(g_bridge_fs_fd, (struct sockaddr*)&fs_addr, sizeof(fs_addr)) < 0) {
+            LOGE("bridge: bind filesystem %s: %s", fs_path, strerror(errno));
             close(g_bridge_fs_fd);
             g_bridge_fs_fd = -1;
         } else if (listen(g_bridge_fs_fd, 8) < 0) {
+            LOGE("bridge: listen filesystem: %s", strerror(errno));
             close(g_bridge_fs_fd);
             g_bridge_fs_fd = -1;
         } else {
             chmod(fs_path, 0777);
+            LOGI("bridge: also listening on filesystem %s", fs_path);
         }
     }
 
@@ -555,8 +585,11 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartX11Bridge(
             close(g_bridge_fd2);
             g_bridge_fd2 = -1;
         } else if (listen(g_bridge_fd2, 8) < 0) {
+            LOGE("bridge: listen @%s: %s", termux_name, strerror(errno));
             close(g_bridge_fd2);
             g_bridge_fd2 = -1;
+        } else {
+            LOGI("bridge: also listening on abstract @%s (Termux libxcb compat)", termux_name);
         }
     }
 
@@ -596,6 +629,7 @@ Java_com_cetotos_polydroid2_GameActivity_nativeGetVulkanInfo(
 }
 
 // -------------------- input injection -----------
+
 static int g_input_sock = -1;
 static struct sockaddr_un g_input_addr;
 static socklen_t g_input_addr_len = 0;
@@ -611,93 +645,93 @@ struct polydroid_input_msg {
 
 // ..im not gonna lie, i just made ai do this. im not looking up all the keycodes myself
 static const int android_to_linux_keycode[304] = {
-    [ 4  ] = 1,    /* BACK → KEY_ESC */
-    [ 7  ] = 11,   /* 0 → KEY_0 */
-    [ 8  ] = 2,    /* 1 → KEY_1 */
-    [ 9  ] = 3,    /* 2 → KEY_2 */
-    [ 10 ] = 4,    /* 3 → KEY_3 */
-    [ 11 ] = 5,    /* 4 → KEY_4 */
-    [ 12 ] = 6,    /* 5 → KEY_5 */
-    [ 13 ] = 7,    /* 6 → KEY_6 */
-    [ 14 ] = 8,    /* 7 → KEY_7 */
-    [ 15 ] = 9,    /* 8 → KEY_8 */
-    [ 16 ] = 10,   /* 9 → KEY_9 */
-    [ 19 ] = 103,  /* DPAD_UP → KEY_UP */
-    [ 20 ] = 108,  /* DPAD_DOWN → KEY_DOWN */
-    [ 21 ] = 105,  /* DPAD_LEFT → KEY_LEFT */
-    [ 22 ] = 106,  /* DPAD_RIGHT → KEY_RIGHT */
-    [ 23 ] = 28,   /* DPAD_CENTER → KEY_ENTER */
-    [ 29 ] = 30,   /* A */
-    [ 30 ] = 48,   /* B */
-    [ 31 ] = 46,   /* C */
-    [ 32 ] = 32,   /* D */
-    [ 33 ] = 18,   /* E */
-    [ 34 ] = 33,   /* F */
-    [ 35 ] = 34,   /* G */
-    [ 36 ] = 35,   /* H */
-    [ 37 ] = 23,   /* I */
-    [ 38 ] = 36,   /* J */
-    [ 39 ] = 37,   /* K */
-    [ 40 ] = 38,   /* L */
-    [ 41 ] = 50,   /* M */
-    [ 42 ] = 49,   /* N */
-    [ 43 ] = 24,   /* O */
-    [ 44 ] = 25,   /* P */
-    [ 45 ] = 16,   /* Q */
-    [ 46 ] = 19,   /* R */
-    [ 47 ] = 31,   /* S */
-    [ 48 ] = 20,   /* T */
-    [ 49 ] = 22,   /* U */
-    [ 50 ] = 47,   /* V */
-    [ 51 ] = 17,   /* W */
-    [ 52 ] = 45,   /* X */
-    [ 53 ] = 21,   /* Y */
-    [ 54 ] = 44,   /* Z */
-    [ 55 ] = 51,   /* COMMA */
-    [ 56 ] = 52,   /* PERIOD */
-    [ 57 ] = 56,   /* ALT_LEFT */
-    [ 58 ] = 100,  /* ALT_RIGHT */
-    [ 59 ] = 42,   /* SHIFT_LEFT */
-    [ 60 ] = 54,   /* SHIFT_RIGHT */
-    [ 61 ] = 15,   /* TAB */
-    [ 62 ] = 57,   /* SPACE */
-    [ 66 ] = 28,   /* ENTER */
-    [ 67 ] = 14,   /* DEL → BACKSPACE */
-    [ 68 ] = 41,   /* GRAVE */
-    [ 69 ] = 12,   /* MINUS */
-    [ 70 ] = 13,   /* EQUALS */
-    [ 71 ] = 26,   /* LEFT_BRACKET */
-    [ 72 ] = 27,   /* RIGHT_BRACKET */
-    [ 73 ] = 43,   /* BACKSLASH */
-    [ 74 ] = 39,   /* SEMICOLON */
-    [ 75 ] = 40,   /* APOSTROPHE */
-    [ 76 ] = 53,   /* SLASH */
-    [ 92 ] = 104,  /* PAGE_UP */
-    [ 93 ] = 109,  /* PAGE_DOWN */
-    [ 111] = 1,    /* ESCAPE */
-    [ 112] = 111,  /* FORWARD_DEL → DELETE */
-    [ 113] = 29,   /* CTRL_LEFT */
-    [ 114] = 97,   /* CTRL_RIGHT */
-    [ 115] = 58,   /* CAPS_LOCK */
-    [ 116] = 70,   /* SCROLL_LOCK */
-    [ 117] = 125,  /* META_LEFT */
-    [ 118] = 126,  /* META_RIGHT */
-    [ 122] = 102,  /* MOVE_HOME → HOME */
-    [ 123] = 107,  /* MOVE_END → END */
-    [ 124] = 110,  /* INSERT */
-    [ 131] = 59,   /* F1 */
-    [ 132] = 60,   /* F2 */
-    [ 133] = 61,   /* F3 */
-    [ 134] = 62,   /* F4 */
-    [ 135] = 63,   /* F5 */
-    [ 136] = 64,   /* F6 */
-    [ 137] = 65,   /* F7 */
-    [ 138] = 66,   /* F8 */
-    [ 139] = 67,   /* F9 */
-    [ 140] = 68,   /* F10 */
-    [ 141] = 87,   /* F11 */
-    [ 142] = 88,   /* F12 */
-    [ 143] = 69,   /* NUM_LOCK */
+    [ 4  ] = 1,
+    [ 7  ] = 11,
+    [ 8  ] = 2,
+    [ 9  ] = 3,
+    [ 10 ] = 4,
+    [ 11 ] = 5,
+    [ 12 ] = 6,
+    [ 13 ] = 7,
+    [ 14 ] = 8,
+    [ 15 ] = 9,
+    [ 16 ] = 10,
+    [ 19 ] = 103,
+    [ 20 ] = 108,
+    [ 21 ] = 105,
+    [ 22 ] = 106,
+    [ 23 ] = 28,
+    [ 29 ] = 30,
+    [ 30 ] = 48,
+    [ 31 ] = 46,
+    [ 32 ] = 32,
+    [ 33 ] = 18,
+    [ 34 ] = 33,
+    [ 35 ] = 34,
+    [ 36 ] = 35,
+    [ 37 ] = 23,
+    [ 38 ] = 36,
+    [ 39 ] = 37,
+    [ 40 ] = 38,
+    [ 41 ] = 50,
+    [ 42 ] = 49,
+    [ 43 ] = 24,
+    [ 44 ] = 25,
+    [ 45 ] = 16,
+    [ 46 ] = 19,
+    [ 47 ] = 31,
+    [ 48 ] = 20,
+    [ 49 ] = 22,
+    [ 50 ] = 47,
+    [ 51 ] = 17,
+    [ 52 ] = 45,
+    [ 53 ] = 21,
+    [ 54 ] = 44,
+    [ 55 ] = 51,
+    [ 56 ] = 52,
+    [ 57 ] = 56,
+    [ 58 ] = 100,
+    [ 59 ] = 42,
+    [ 60 ] = 54,
+    [ 61 ] = 15,
+    [ 62 ] = 57,
+    [ 66 ] = 28,
+    [ 67 ] = 14,
+    [ 68 ] = 41,
+    [ 69 ] = 12,
+    [ 70 ] = 13,
+    [ 71 ] = 26,
+    [ 72 ] = 27,
+    [ 73 ] = 43,
+    [ 74 ] = 39,
+    [ 75 ] = 40,
+    [ 76 ] = 53,
+    [ 92 ] = 104,
+    [ 93 ] = 109,
+    [ 111] = 1,
+    [ 112] = 111,
+    [ 113] = 29,
+    [ 114] = 97,
+    [ 115] = 58,
+    [ 116] = 70,
+    [ 117] = 125,
+    [ 118] = 126,
+    [ 122] = 102,
+    [ 123] = 107,
+    [ 124] = 110,
+    [ 131] = 59,
+    [ 132] = 60,
+    [ 133] = 61,
+    [ 134] = 62,
+    [ 135] = 63,
+    [ 136] = 64,
+    [ 137] = 65,
+    [ 138] = 66,
+    [ 139] = 67,
+    [ 140] = 68,
+    [ 141] = 87,
+    [ 142] = 88,
+    [ 143] = 69,
 };
 
 JNIEXPORT void JNICALL
@@ -777,7 +811,7 @@ Java_com_cetotos_polydroid2_GameActivity_nativeSendKeyEvent(
                        (struct sockaddr*)&g_input_addr, g_input_addr_len);
     if (n < 0) {
         LOGE("key sendto failed: %s", strerror(errno));
-    } else if (key_log < 67 /* boii😂 */) {
+    } else if (key_log < 20) {
         LOGI("key sent: scanCode=%d x11=%d down=%d n=%zd", linux_code, x11_keycode, keyDown, n);
         key_log++;
     }
