@@ -1,7 +1,7 @@
 # PolyDroid 2
 
 PolyDroid 2 is an updated, more native rewrite of PolyDroid, which runs the Polytoria Client on Android.
-While PolyDroid ran the game with the Windows client, using multiple translation layers, PolyDroid uses only 1 translation layer being Box64
+While PolyDroid ran the game with the Windows client, using multiple translation layers, PolyDroid 2 uses the Linux client and only 1 translation layer being Box64.
 
 ## Installation
 
