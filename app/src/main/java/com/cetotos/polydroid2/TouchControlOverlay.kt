@@ -273,11 +273,14 @@ class TouchControlOverlay(
         }
 
         if (cameraDragging) {
-            val dx = (x - cameraLastX) / width * renderWidth
-            val dy = (y - cameraLastY) / height * renderHeight
-            cameraDeltaX += dx
-            cameraDeltaY += dy
-            sendInput(INPUT_MOTION, 0, cameraDeltaX.toInt(), cameraDeltaY.toInt())
+            val cx = renderWidth / 2
+            val cy = renderHeight / 2
+            val dx = (x - cameraLastX) / width * renderWidth * 3f
+            val dy = (y - cameraLastY) / height * renderHeight * 3f
+            sendInput(INPUT_MOTION, 0, (cx + dx).toInt(), (cy + dy).toInt())
+            sendInput(INPUT_MOTION, 0, cx, cy)
+            cameraDeltaX = cx.toFloat()
+            cameraDeltaY = cy.toFloat()
         }
 
         cameraLastX = x
