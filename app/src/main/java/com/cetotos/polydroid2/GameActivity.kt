@@ -74,12 +74,17 @@ class GameActivity : AppCompatActivity() {
         val screenWidth = metrics.widthPixels
         val screenHeight = metrics.heightPixels
 
-        // hardcoded to 720p for now
-        // TODO: make this adjustable by user
-        val shortEdge = minOf(screenWidth, screenHeight)
-        val scale = if (shortEdge > 720) 720.0 / shortEdge else 1.0
-        renderWidth = (screenWidth * scale).toInt()
-        renderHeight = (screenHeight * scale).toInt()
+        val (customEnabled, resParam1, resParam2) = SettingsActivity.getResolution(this)
+        if (customEnabled) {
+            renderWidth = resParam1
+            renderHeight = resParam2
+        } else {
+            val targetShortEdge = resParam1
+            val shortEdge = minOf(screenWidth, screenHeight)
+            val scale = if (shortEdge > targetShortEdge) targetShortEdge.toDouble() / shortEdge else 1.0
+            renderWidth = (screenWidth * scale).toInt()
+            renderHeight = (screenHeight * scale).toInt()
+        }
 
         startTimeMs = System.currentTimeMillis()
 
@@ -106,6 +111,7 @@ class GameActivity : AppCompatActivity() {
 
         // Vulkan SurfaceView
         vulkanSurface = SurfaceView(this)
+        vulkanSurface.setZOrderMediaOverlay(true)
 
         vulkanSurface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
@@ -141,6 +147,7 @@ class GameActivity : AppCompatActivity() {
             renderHeight = renderHeight,
             sendInput = { type, button, x, y -> nativeSendInputEvent(type, button, x, y) },
             sendKey = { scanCode, keyCode, down -> nativeSendKeyEvent(scanCode, keyCode, down) },
+            cameraSensitivity = SettingsActivity.getCameraSensitivity(this),
         )
         frame.addView(touchOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -170,6 +177,10 @@ class GameActivity : AppCompatActivity() {
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
         frame.addView(statsView, statsParams)
+
+        if (!SettingsActivity.getShowStats(this)) {
+            statsView.visibility = android.view.View.GONE
+        }
 
         setContentView(frame)
 
@@ -253,6 +264,8 @@ class GameActivity : AppCompatActivity() {
                 appendLog("Failed to connect LorieView to X server after 5s!")
             }
 
+            // wait for compositor before launching Box64
+            while (!vulkanSurfaceReady) Thread.sleep(100)
             appendLog("Launching Box64...")
             try {
                 Box64Launcher.launch(this, tmpDir, fullArgs, renderWidth, renderHeight) { line ->

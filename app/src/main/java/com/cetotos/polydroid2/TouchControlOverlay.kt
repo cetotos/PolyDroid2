@@ -20,6 +20,7 @@ class TouchControlOverlay(
     private val renderHeight: Int,
     private val sendInput: (type: Int, button: Int, x: Int, y: Int) -> Unit,
     private val sendKey: (scanCode: Int, keyCode: Int, down: Boolean) -> Unit,
+    private val cameraSensitivity: Float = 3f,
 ) : View(context) {
 
     companion object {
@@ -275,8 +276,8 @@ class TouchControlOverlay(
         if (cameraDragging) {
             val cx = renderWidth / 2
             val cy = renderHeight / 2
-            val dx = (x - cameraLastX) / width * renderWidth * 3f
-            val dy = (y - cameraLastY) / height * renderHeight * 3f
+            val dx = (x - cameraLastX) / width * renderWidth * cameraSensitivity
+            val dy = (y - cameraLastY) / height * renderHeight * cameraSensitivity
             sendInput(INPUT_MOTION, 0, (cx + dx).toInt(), (cy + dy).toInt())
             sendInput(INPUT_MOTION, 0, cx, cy)
             cameraDeltaX = cx.toFloat()

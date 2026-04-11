@@ -5,61 +5,23 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
-import androidx.browser.customtabs.CustomTabsIntent
 
 class LoginActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "PolyDroid2"
-        private const val POLYTORIA_URL = "https://polytoria.com/home"
-        private const val STATE_LAUNCHED = "custom_tab_launched"
     }
-
-    private var customTabLaunched = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (handlePolytoriaIntent(intent)) return
-
-        customTabLaunched = savedInstanceState?.getBoolean(STATE_LAUNCHED) == true
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (!customTabLaunched) {
-            customTabLaunched = true
-            launchCustomTab()
-        } else {
+        if (!handlePolytoriaIntent(intent)) {
             finish()
         }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putBoolean(STATE_LAUNCHED, customTabLaunched)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handlePolytoriaIntent(intent)
-    }
-
-    private fun launchCustomTab() {
-        Log.i(TAG, "Launching Custom Tab for $POLYTORIA_URL")
-        try {
-            val customTabsIntent = CustomTabsIntent.Builder()
-                .setShowTitle(false)
-                .setUrlBarHidingEnabled(true)
-                .build()
-            customTabsIntent.launchUrl(this, Uri.parse(POLYTORIA_URL))
-        } catch (e: Exception) {
-            try {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(POLYTORIA_URL)))
-            } catch (e2: Exception) {
-                Log.e(TAG, "No browser available!", e2)
-                finish()
-            }
-        }
     }
 
     private fun handlePolytoriaIntent(intent: Intent): Boolean {
@@ -70,14 +32,13 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun handlePolytoriaUri(uri: Uri) {
-        // Log.i(TAG, "Received Polytoria URI: $uri")
-
         val segments = mutableListOf<String>()
         uri.host?.let { segments.add(it) }
         uri.pathSegments?.let { segments.addAll(it) }
 
         if (segments.size < 2) {
             Log.e(TAG, "Invalid URL! $uri")
+            finish()
             return
         }
 
