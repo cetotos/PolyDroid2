@@ -112,10 +112,16 @@ static int build_trampoline(uint8_t *tramp, uintptr_t return_addr,
         return (int)(p - tramp);
     }
 
-    *p++ = 0x4D;
-    *p++ = 0x85;
-    *p++ = (src_reg == 14) ? 0xF6 : 0xFF;
-    *p++ = 0x74;
+    *p++ = 0x50;
+    if (src_reg == 14) {
+        *p++ = 0x4C; *p++ = 0x89; *p++ = 0xF0;
+    } else {
+        *p++ = 0x4C; *p++ = 0x89; *p++ = 0xF8;
+    }
+    *p++ = 0x48; *p++ = 0xC1; *p++ = 0xE8; *p++ = 0x38;
+    *p++ = 0x3C; *p++ = 0x80;
+    *p++ = 0x58;
+    *p++ = 0x72;
     *p++ = 12;
     memcpy(p, orig_bytes, 4); p += 4;
     memcpy(p, orig_bytes + 4, 3); p += 3;
@@ -134,8 +140,8 @@ static int build_trampoline(uint8_t *tramp, uintptr_t return_addr,
 // scan function at +c194d0 for all matches and patch every single one
 static int apply_patches(uintptr_t base) {
     fprintf(stderr, "unity_patch: UnityPlayer.so base=%p\n", (void*)base);
-    uintptr_t scan_start = base + 0xc19300;
-    uintptr_t scan_end   = base + 0xc19600;
+    uintptr_t scan_start = base + 0xc18400;
+    uintptr_t scan_end   = base + 0xc18600;
     uintptr_t scan_size  = scan_end - scan_start;
     fprintf(stderr, "unity_patch: scanning %p-%p for matches...\n",
             (void*)scan_start, (void*)scan_end);
@@ -150,7 +156,7 @@ static int apply_patches(uintptr_t base) {
                 matches[match_count].addr = addr;
                 matches[match_count].pat_idx = pi;
                 match_count++;
-                fprintf(stderr, "unity_patch:   match: +0x%lx pattern %d (r%d)\n",
+                fprintf(stderr, "unity_patch: match: +0x%lx pattern %d (r%d)\n",
                         (unsigned long)(addr - base), pi, patterns[pi].src_reg);
                 addr += 6;  // skip this match
                 break;
@@ -170,7 +176,7 @@ static int apply_patches(uintptr_t base) {
         return 0;
     }
     int64_t page_dist = (int64_t)((uintptr_t)tramp_page - scan_start);
-    // fprintf(stderr, "unity_patch: trampoline page at %p (dist=%ld)\n",
+    fprintf(stderr, "unity_patch: trampoline page at %p (dist=%ld)\n",
             tramp_page, (long)page_dist);
     uint8_t *tramp_ptr = tramp_page;
     int patched = 0;
@@ -202,13 +208,9 @@ static int apply_patches(uintptr_t base) {
 
         mprotect((void*)page, 0x2000, PROT_READ | PROT_EXEC);
 
-        if (patterns[pi].src_reg == 0)
-            fprintf(stderr, "unity_patch: patched +0x%lx → trampoline %p\n",
-                    (unsigned long)(patch_addr - base), tramp_ptr);
-        else
-            fprintf(stderr, "unity_patch: patched +0x%lx → trampoline %p",
-                    (unsigned long)(patch_addr - base), tramp_ptr,
-                    patterns[pi].src_reg, patterns[pi].pattern[3]);
+        fprintf(stderr, "unity_patch: patched +0x%lx → trampoline %p (r%d, +0x%02x)\n",
+                (unsigned long)(patch_addr - base), tramp_ptr,
+                patterns[pi].src_reg, patterns[pi].pattern[3]);
 
         tramp_ptr += tramp_size;
         patched++;
@@ -252,7 +254,7 @@ static int try_maps_scan(void) {
         }
 
         uintptr_t base = start - first_load_vaddr;
-        // fprintf(stderr, "unity_patch: ELF base=%p (first_load=0x%lx)\n",
+        fprintf(stderr, "unity_patch: ELF base=%p (first_load=0x%lx)\n",
                 (void*)base, (unsigned long)first_load_vaddr);
         return apply_patches(base);
     }
