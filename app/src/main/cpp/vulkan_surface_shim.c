@@ -1592,6 +1592,12 @@ static VkResult shim_vkQueuePresentKHR(
             if (pfn_queueSubmit) pfn_queueSubmit(queue, 1, &empty, presentFence);
         }
 
+        // we need to tell compositor to wait for GPU when sending frames,
+        // otherwise it will stutter. this is as an issue only on system driver (atleast the adreno one, i dont know about mali)
+        if (g_using_system_driver && presentFence && pfn_waitForFences) {
+            pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
+        }
+
         if (g_swapchain_has_dmabuf && g_compositor_sock >= 0) {
             uint32_t msg[2] = { imgIdx, unity_fps };
             if (send(g_compositor_sock, msg, sizeof(msg), MSG_NOSIGNAL) != sizeof(msg)) {
