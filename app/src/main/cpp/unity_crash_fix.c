@@ -141,7 +141,7 @@ static int build_trampoline(uint8_t *tramp, uintptr_t return_addr,
 static int apply_patches(uintptr_t base) {
     fprintf(stderr, "unity_patch: UnityPlayer.so base=%p\n", (void*)base);
     uintptr_t scan_start = base + 0xc18400;
-    uintptr_t scan_end   = base + 0xc18600;
+    uintptr_t scan_end   = base + 0xc19600;
     uintptr_t scan_size  = scan_end - scan_start;
     fprintf(stderr, "unity_patch: scanning %p-%p for matches...\n",
             (void*)scan_start, (void*)scan_end);

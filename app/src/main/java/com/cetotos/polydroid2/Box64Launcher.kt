@@ -237,6 +237,18 @@ object Box64Launcher {
         }
 
         try {
+            val dest = File("$rootPath/polytoria", "libunity_crash_fix.so")
+            ctx.assets.open("x86_64-libs/libunity_crash_fix.so").use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+            dest.setExecutable(true, false)
+            dest.setReadable(true, false)
+            Log.i(TAG, "Deployed unity crash fix")
+        } catch (e: Exception) {
+            Log.w(TAG, "Unity crash fix not found: ${e.message}")
+        }
+
+        try {
             ctx.assets.open("x86_64-libs/libX11_stub.so").use { input ->
                 File(x86LibDir, "libX11.so.6").outputStream().use { output -> input.copyTo(output) }
             }
