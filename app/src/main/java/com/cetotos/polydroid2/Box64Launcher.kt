@@ -351,6 +351,14 @@ object Box64Launcher {
                 put("POLYDROID_VULKAN_SURFACE_PTR", ptrFile.readText().trim())
             }
 
+            // vulkan driver preference
+            val vulkanDriver = SettingsActivity.getVulkanDriver(ctx)
+            if (vulkanDriver == SettingsActivity.VULKAN_DRIVER_SYSTEM) {
+                put("POLYDROID_FORCE_SYSTEM_DRIVER", "1")
+            } else if (vulkanDriver == SettingsActivity.VULKAN_DRIVER_TURNIP) {
+                put("POLYDROID_FORCE_TURNIP", "1")
+            }
+
             // screen resolution for surface
             put("POLYDROID_SCREEN_WIDTH", "$screenWidth")
             put("POLYDROID_SCREEN_HEIGHT", "$screenHeight")

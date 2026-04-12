@@ -114,7 +114,7 @@ static void* bridge_conn_thread(void* arg) {
         return NULL;
     }
 
-    LOGI("bridge: connected client_fd=%d to server @%s (sendmsg/recvmsg mode)", client_fd, g_real_path);
+    LOGI("bridge: connected client_fd=%d to server", client_fd, g_real_path);
 
     struct pollfd pfds[2];
     pfds[0].fd = client_fd;
@@ -239,7 +239,6 @@ static void* compositor_thread(void* arg) {
 
     pid_t tid = (pid_t)syscall(SYS_gettid);
     if (setpriority(PRIO_PROCESS, tid, -6) == 0) {
-        LOGI("compositor: thread priority set to nice -6 (tid=%d)", tid);
     } else {
         LOGI("compositor: setpriority failed: %s (non-fatal)", strerror(errno));
     }
@@ -264,7 +263,6 @@ static void* compositor_thread(void* arg) {
         }
         uint32_t width = req[0], height = req[1], format = req[2], count = req[3];
         if (count > COMPOSITOR_MAX_BUFFERS) count = COMPOSITOR_MAX_BUFFERS;
-        LOGI("compositor: allocating %u buffers %ux%u fmt=%u", count, width, height, format);
 
         int alloc_failed = 0;
         for (uint32_t i = 0; i < count; i++) {
@@ -297,7 +295,6 @@ static void* compositor_thread(void* arg) {
 
             AHardwareBuffer_Desc actual_desc;
             AHardwareBuffer_describe(g_comp_ahbs[i], &actual_desc);
-            LOGI("compositor: sent AHB[%u] stride=%u (linear for SurfaceFlinger)", i, actual_desc.stride);
         }
         g_comp_ahb_count = count;
 
@@ -784,7 +781,6 @@ Java_com_cetotos_polydroid2_GameActivity_nativeSendKeyEvent(
         g_input_addr.sun_path[0] = '\0';
         memcpy(g_input_addr.sun_path + 1, "polydroid_input", 15);
         g_input_addr_len = offsetof(struct sockaddr_un, sun_path) + 1 + 15;
-        LOGI("input socket created (fd=%d)", g_input_sock);
     }
 
     // Android keycode --> X11 keycode (its just X11 keycode + 8)
@@ -812,7 +808,6 @@ Java_com_cetotos_polydroid2_GameActivity_nativeSendKeyEvent(
     if (n < 0) {
         LOGE("key sendto failed: %s", strerror(errno));
     } else if (key_log < 20) {
-        LOGI("key sent: scanCode=%d x11=%d down=%d n=%zd", linux_code, x11_keycode, keyDown, n);
         key_log++;
     }
 }

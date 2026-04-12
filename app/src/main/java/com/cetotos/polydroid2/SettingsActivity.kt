@@ -29,6 +29,10 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_CUSTOM_HEIGHT = "custom_height"
         const val KEY_CAMERA_SENSITIVITY = "camera_sensitivity"
         const val KEY_SHOW_STATS = "show_stats"
+        const val KEY_VULKAN_DRIVER = "vulkan_driver"
+        const val VULKAN_DRIVER_AUTO = "auto"
+        const val VULKAN_DRIVER_SYSTEM = "system"
+        const val VULKAN_DRIVER_TURNIP = "turnip"
         const val DEFAULT_RESOLUTION = 720
         const val DEFAULT_SENSITIVITY = 3f
 
@@ -50,6 +54,11 @@ class SettingsActivity : AppCompatActivity() {
         fun getShowStats(ctx: Context): Boolean {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             return prefs.getBoolean(KEY_SHOW_STATS, true)
+        }
+
+        fun getVulkanDriver(ctx: Context): String {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_AUTO) ?: VULKAN_DRIVER_AUTO
         }
 
         fun getResolution(ctx: Context): Triple<Boolean, Int, Int> {
@@ -208,6 +217,40 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         content.addView(statsSwitch, layoutParams())
+
+        val driverOptions = listOf(
+            VULKAN_DRIVER_AUTO to "Auto",
+            VULKAN_DRIVER_SYSTEM to "System driver (Adreno/Mali)", // system driver has better performance, well on my phone atleast, but its kinda broken
+            VULKAN_DRIVER_TURNIP to "Turnip (Adreno only)",
+        )
+        val driverDropdown = AutoCompleteTextView(this).apply {
+            inputType = InputType.TYPE_NULL
+            setAdapter(ArrayAdapter(
+                this@SettingsActivity,
+                android.R.layout.simple_dropdown_item_1line,
+                driverOptions.map { it.second }
+            ))
+        }
+        val driverLayout = TextInputLayout(
+            this,
+            null,
+            com.google.android.material.R.attr.textInputOutlinedExposedDropdownMenuStyle
+        ).apply {
+            hint = "Vulkan driver"
+            endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
+            setPadding(0, dp(16), 0, 0)
+            addView(driverDropdown)
+        }
+        content.addView(driverLayout, layoutParams())
+
+        val currentDriver = prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_AUTO) ?: VULKAN_DRIVER_AUTO
+        val driverIndex = driverOptions.indexOfFirst { it.first == currentDriver }
+        if (driverIndex >= 0) {
+            driverDropdown.setText(driverOptions[driverIndex].second, false)
+        }
+        driverDropdown.setOnItemClickListener { _, _, position, _ ->
+            prefs.edit().putString(KEY_VULKAN_DRIVER, driverOptions[position].first).apply()
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

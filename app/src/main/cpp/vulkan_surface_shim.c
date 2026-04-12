@@ -86,6 +86,7 @@ static void load_nativewindow(void) {
 }
 
 static void* g_real_vulkan = NULL;
+static int g_using_system_driver = 0;
 
 static PFN_vkGetInstanceProcAddr real_vkGetInstanceProcAddr = NULL;
 static PFN_vkCreateInstance real_vkCreateInstance = NULL;
@@ -96,29 +97,181 @@ static VkInstance g_instance = VK_NULL_HANDLE;
 static ANativeWindow* g_native_window = NULL;
 static int g_window_loaded = 0;
 
+// detect GPU vendor with EGL to decide if Turnip or system driver
+static int detect_adreno_gpu(void) {
+    void* libEGL = dlopen("libEGL.so", RTLD_NOW);
+    void* libGLES = dlopen("libGLESv2.so", RTLD_NOW);
+    if (!libEGL || !libGLES) {
+        if (libEGL) dlclose(libEGL);
+        if (libGLES) dlclose(libGLES);
+        return 0;
+    }
+
+    typedef void* EGLDisplay;
+    typedef void* EGLConfig;
+    typedef void* EGLSurface;
+    typedef void* EGLContext;
+    typedef unsigned int EGLBoolean;
+    typedef int EGLint;
+
+    #define MY_EGL_DEFAULT_DISPLAY ((void*)0)
+    #define MY_EGL_NO_CONTEXT ((EGLContext)0)
+    #define MY_EGL_NO_SURFACE ((EGLSurface)0)
+    #define MY_EGL_NO_DISPLAY ((EGLDisplay)0)
+    #define MY_EGL_RENDERABLE_TYPE 0x3040
+    #define MY_EGL_OPENGL_ES2_BIT 0x0004
+    #define MY_EGL_SURFACE_TYPE 0x3033
+    #define MY_EGL_PBUFFER_BIT 0x0001
+    #define MY_EGL_NONE 0x3038
+    #define MY_EGL_WIDTH 0x3057
+    #define MY_EGL_HEIGHT 0x3056
+    #define MY_EGL_CONTEXT_CLIENT_VERSION 0x3098
+    #define MY_GL_RENDERER 0x1F01
+
+    typedef EGLDisplay (*PFN_eglGetDisplay)(void*);
+    typedef EGLBoolean (*PFN_eglInitialize)(EGLDisplay, EGLint*, EGLint*);
+    typedef EGLBoolean (*PFN_eglChooseConfig)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*);
+    typedef EGLSurface (*PFN_eglCreatePbufferSurface)(EGLDisplay, EGLConfig, const EGLint*);
+    typedef EGLContext (*PFN_eglCreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint*);
+    typedef EGLBoolean (*PFN_eglMakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+    typedef EGLBoolean (*PFN_eglDestroyContext)(EGLDisplay, EGLContext);
+    typedef EGLBoolean (*PFN_eglDestroySurface)(EGLDisplay, EGLSurface);
+    typedef EGLBoolean (*PFN_eglTerminate)(EGLDisplay);
+    typedef const unsigned char* (*PFN_glGetString)(unsigned int);
+
+    PFN_eglGetDisplay pfn_eglGetDisplay = (PFN_eglGetDisplay)dlsym(libEGL, "eglGetDisplay");
+    PFN_eglInitialize pfn_eglInitialize = (PFN_eglInitialize)dlsym(libEGL, "eglInitialize");
+    PFN_eglChooseConfig pfn_eglChooseConfig = (PFN_eglChooseConfig)dlsym(libEGL, "eglChooseConfig");
+    PFN_eglCreatePbufferSurface pfn_eglCreatePbufferSurface = (PFN_eglCreatePbufferSurface)dlsym(libEGL, "eglCreatePbufferSurface");
+    PFN_eglCreateContext pfn_eglCreateContext = (PFN_eglCreateContext)dlsym(libEGL, "eglCreateContext");
+    PFN_eglMakeCurrent pfn_eglMakeCurrent = (PFN_eglMakeCurrent)dlsym(libEGL, "eglMakeCurrent");
+    PFN_eglDestroyContext pfn_eglDestroyContext = (PFN_eglDestroyContext)dlsym(libEGL, "eglDestroyContext");
+    PFN_eglDestroySurface pfn_eglDestroySurface = (PFN_eglDestroySurface)dlsym(libEGL, "eglDestroySurface");
+    PFN_eglTerminate pfn_eglTerminate = (PFN_eglTerminate)dlsym(libEGL, "eglTerminate");
+    PFN_glGetString pfn_glGetString = (PFN_glGetString)dlsym(libGLES, "glGetString");
+
+    if (!pfn_eglGetDisplay || !pfn_eglInitialize || !pfn_eglChooseConfig ||
+        !pfn_eglCreatePbufferSurface || !pfn_eglCreateContext || !pfn_eglMakeCurrent ||
+        !pfn_glGetString) {
+        LOGI("shim: EGL symbols not available, assuming non-Adreno");
+        dlclose(libEGL); dlclose(libGLES);
+        return 0;
+    }
+
+    int result = 0;
+    EGLDisplay display = pfn_eglGetDisplay(MY_EGL_DEFAULT_DISPLAY);
+    if (display == MY_EGL_NO_DISPLAY) { dlclose(libEGL); dlclose(libGLES); return 0; }
+
+    EGLint major, minor;
+    if (!pfn_eglInitialize(display, &major, &minor)) { dlclose(libEGL); dlclose(libGLES); return 0; }
+
+    EGLint configAttribs[] = { MY_EGL_RENDERABLE_TYPE, MY_EGL_OPENGL_ES2_BIT,
+                               MY_EGL_SURFACE_TYPE, MY_EGL_PBUFFER_BIT, MY_EGL_NONE };
+    EGLConfig config;
+    EGLint numConfigs;
+    if (!pfn_eglChooseConfig(display, configAttribs, &config, 1, &numConfigs) || numConfigs == 0) {
+        if (pfn_eglTerminate) pfn_eglTerminate(display);
+        dlclose(libEGL); dlclose(libGLES);
+        return 0;
+    }
+
+    EGLint pbufAttribs[] = { MY_EGL_WIDTH, 1, MY_EGL_HEIGHT, 1, MY_EGL_NONE };
+    EGLSurface surface = pfn_eglCreatePbufferSurface(display, config, pbufAttribs);
+    if (surface == MY_EGL_NO_SURFACE) {
+        if (pfn_eglTerminate) pfn_eglTerminate(display);
+        dlclose(libEGL); dlclose(libGLES);
+        return 0;
+    }
+
+    EGLint ctxAttribs[] = { MY_EGL_CONTEXT_CLIENT_VERSION, 2, MY_EGL_NONE };
+    EGLContext context = pfn_eglCreateContext(display, config, MY_EGL_NO_CONTEXT, ctxAttribs);
+    if (context == MY_EGL_NO_CONTEXT) {
+        if (pfn_eglDestroySurface) pfn_eglDestroySurface(display, surface);
+        if (pfn_eglTerminate) pfn_eglTerminate(display);
+        dlclose(libEGL); dlclose(libGLES);
+        return 0;
+    }
+
+    pfn_eglMakeCurrent(display, surface, surface, context);
+    const char* renderer = (const char*)pfn_glGetString(MY_GL_RENDERER);
+    if (renderer) {
+        LOGI("shim: GL_RENDERER = %s", renderer);
+        const char* r = renderer;
+        while (*r) {
+            if ((r[0] == 'A' || r[0] == 'a') &&
+                (r[1] == 'D' || r[1] == 'd') &&
+                (r[2] == 'R' || r[2] == 'r') &&
+                (r[3] == 'E' || r[3] == 'e') &&
+                (r[4] == 'N' || r[4] == 'n') &&
+                (r[5] == 'O' || r[5] == 'o')) {
+                result = 1;
+                break;
+            }
+            r++;
+        }
+    }
+
+    pfn_eglMakeCurrent(display, MY_EGL_NO_SURFACE, MY_EGL_NO_SURFACE, MY_EGL_NO_CONTEXT);
+    if (pfn_eglDestroyContext) pfn_eglDestroyContext(display, context);
+    if (pfn_eglDestroySurface) pfn_eglDestroySurface(display, surface);
+    if (pfn_eglTerminate) pfn_eglTerminate(display);
+    dlclose(libEGL);
+    dlclose(libGLES);
+
+    LOGI("shim: GPU vendor: %s", result ? "Adreno (will use Turnip)" : "non-Adreno (will use system Vulkan)");
+    return result;
+}
+
 static void load_real_vulkan(void) {
     if (g_real_vulkan) return;
 
-    const char* rootdir = getenv("POLYDROID_ROOTDIR");
-    if (!rootdir) {
-        LOGE("POLYDROID_ROOTDIR not set");
-        return;
+    const char* force_system = getenv("POLYDROID_FORCE_SYSTEM_DRIVER");
+    const char* force_turnip = getenv("POLYDROID_FORCE_TURNIP");
+
+    int use_turnip;
+    if (force_system && force_system[0] == '1') {
+        LOGI("shim: forced to system driver by setting");
+        use_turnip = 0;
+    } else if (force_turnip && force_turnip[0] == '1') {
+        LOGI("shim: forced to Turnip by setting");
+        use_turnip = 1;
+    } else {
+        use_turnip = detect_adreno_gpu();
     }
 
-    char path[512];
-    snprintf(path, sizeof(path), "%s/usr/lib/arm64-native/libc++_shared.so", rootdir);
-    dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-    snprintf(path, sizeof(path), "%s/usr/lib/arm64-native/libdrm.so.2", rootdir);
-    dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    if (use_turnip) {
+        const char* rootdir = getenv("POLYDROID_ROOTDIR");
+        if (!rootdir) {
+            LOGE("POLYDROID_ROOTDIR not set");
+            return;
+        }
 
-    snprintf(path, sizeof(path), "%s/usr/lib/arm64-native/libvulkan_freedreno.so", rootdir);
-    LOGI("shim: loading Turnip from %s", path);
-    g_real_vulkan = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/usr/lib/arm64-native/libc++_shared.so", rootdir);
+        dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+        snprintf(path, sizeof(path), "%s/usr/lib/arm64-native/libdrm.so.2", rootdir);
+        dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+
+        snprintf(path, sizeof(path), "%s/usr/lib/arm64-native/libvulkan_freedreno.so", rootdir);
+        LOGI("shim: loading Turnip from %s", path);
+        g_real_vulkan = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        if (g_real_vulkan) {
+            LOGI("shim: Turnip loaded");
+        } else {
+            LOGI("shim: Turnip load failed: %s, falling back to system Vulkan", dlerror());
+        }
+    }
+
     if (!g_real_vulkan) {
-        LOGE("shim: Turnip load failed: %s", dlerror());
-        return;
+        g_real_vulkan = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (g_real_vulkan) {
+            g_using_system_driver = 1;
+            LOGI("shim: system Vulkan driver loaded");
+        } else {
+            LOGE("shim: system Vulkan driver load failed: %s", dlerror());
+            return;
+        }
     }
-    LOGI("shim: Turnip loaded");
 
     real_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)
         dlsym(g_real_vulkan, "vkGetInstanceProcAddr");
@@ -1006,6 +1159,20 @@ static VkResult shim_vkCreateSwapchainKHR(
 
     g_swapchain_has_dmabuf = 1;
 
+    // resolve vkGetAndroidHardwareBufferPropertiesANDROID (needed by both paths)
+    typedef VkResult (*PFN_vkGetAHBProps)(VkDevice, const struct AHardwareBuffer*, VkAndroidHardwareBufferPropertiesANDROID*);
+    PFN_vkGetAHBProps pfn_getAHBProps = NULL;
+    if (real_vkGetInstanceProcAddr && g_instance) {
+        typedef PFN_vkVoidFunction (*PFN_gdpa)(VkDevice, const char*);
+        PFN_gdpa gdpa = (PFN_gdpa)real_vkGetInstanceProcAddr(g_instance, "vkGetDeviceProcAddr");
+        if (gdpa) pfn_getAHBProps = (PFN_vkGetAHBProps)gdpa(device, "vkGetAndroidHardwareBufferPropertiesANDROID");
+    }
+    if (!pfn_getAHBProps) {
+        LOGE("vkGetAndroidHardwareBufferPropertiesANDROID not available");
+        destroy_swapchain_images();
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
     for (uint32_t i = 0; i < count; i++) {
         if (!g_swapchain_ahbs[i]) {
             LOGE("AHB[%u] is NULL", i);
@@ -1022,20 +1189,6 @@ static VkResult shim_vkCreateSwapchainKHR(
             .pNext = &ahbFmtProps,
         };
 
-        typedef VkResult (*PFN_vkGetAHBProps)(VkDevice, const struct AHardwareBuffer*, VkAndroidHardwareBufferPropertiesANDROID*);
-        PFN_vkGetAHBProps pfn_getAHBProps = NULL;
-        if (real_vkGetInstanceProcAddr && g_instance) {
-            typedef PFN_vkVoidFunction (*PFN_gdpa)(VkDevice, const char*);
-            PFN_gdpa gdpa = (PFN_gdpa)real_vkGetInstanceProcAddr(g_instance, "vkGetDeviceProcAddr");
-            if (gdpa) pfn_getAHBProps = (PFN_vkGetAHBProps)gdpa(device, "vkGetAndroidHardwareBufferPropertiesANDROID");
-        }
-
-        if (!pfn_getAHBProps) {
-            LOGE("vkGetAndroidHardwareBufferPropertiesANDROID not available");
-            destroy_swapchain_images();
-            return VK_ERROR_INITIALIZATION_FAILED;
-        }
-
         VkResult r = pfn_getAHBProps(device, g_swapchain_ahbs[i], &ahbProps);
         if (r != VK_SUCCESS) {
             LOGE("vkGetAndroidHardwareBufferPropertiesANDROID[%u] failed: %d", i, r);
@@ -1048,143 +1201,229 @@ static VkResult shim_vkCreateSwapchainKHR(
              i, (unsigned long long)ahbProps.allocationSize, ahbProps.memoryTypeBits,
              ahbFmtProps.format);
 
-        // we need linear presentation, otherwise, it will break format.
-        VkSubresourceLayout drmLayout = {
-            .offset = 0,
-            .size = 0,
-            .rowPitch = g_swapchain_strides[i] * 4,
-            .arrayPitch = 0,
-            .depthPitch = 0,
-        };
+        if (g_using_system_driver) {
+            VkExternalMemoryImageCreateInfo extImgInfo = {
+                .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+                .pNext = NULL,
+                .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID,
+            };
 
-        typedef struct {
-            VkStructureType sType;
-            const void* pNext;
-            uint64_t drmFormatModifier;
-            uint32_t drmFormatModifierPlaneCount;
-            const VkSubresourceLayout* pPlaneLayouts;
-        } VkImageDrmFormatModifierExplicitCreateInfoEXT;
+            VkImageCreateInfo imgInfo = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .pNext = &extImgInfo,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = ahbFmtProps.format ? ahbFmtProps.format : VK_FORMAT_R8G8B8A8_UNORM,
+                .extent = { pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, 1 },
+                .mipLevels = 1,
+                .arrayLayers = pCreateInfo->imageArrayLayers,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = pCreateInfo->imageUsage,
+                .sharingMode = pCreateInfo->imageSharingMode,
+                .queueFamilyIndexCount = pCreateInfo->queueFamilyIndexCount,
+                .pQueueFamilyIndices = pCreateInfo->pQueueFamilyIndices,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            };
 
-        VkImageDrmFormatModifierExplicitCreateInfoEXT drmModInfo = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-            .pNext = NULL,
-            .drmFormatModifier = 0,
-            .drmFormatModifierPlaneCount = 1,
-            .pPlaneLayouts = &drmLayout,
-        };
+            r = pfn_createImage(device, &imgInfo, NULL, &g_swapchain_images[i]);
+            if (r != VK_SUCCESS) {
+                LOGE("vkCreateImage[%u] (AHB) failed: %d", i, r);
+                destroy_swapchain_images();
+                return r;
+            }
 
-        if (!pfn_ahb_getNativeHandle) {
-            pfn_ahb_getNativeHandle = (PFN_AHardwareBuffer_getNativeHandle)
-                dlsym(RTLD_DEFAULT, "AHardwareBuffer_getNativeHandle");
+            typedef struct {
+                VkStructureType sType;
+                const void* pNext;
+                struct AHardwareBuffer* buffer;
+            } VkImportAndroidHardwareBufferInfoANDROID;
+
+            VkImportAndroidHardwareBufferInfoANDROID importAhbInfo = {
+                .sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID,
+                .pNext = NULL,
+                .buffer = g_swapchain_ahbs[i],
+            };
+
+            typedef struct {
+                VkStructureType sType;
+                const void* pNext;
+                VkImage image;
+                VkBuffer buffer;
+            } VkMemoryDedicatedAllocateInfo;
+
+            VkMemoryDedicatedAllocateInfo dedicatedInfo = {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+                .pNext = &importAhbInfo,
+                .image = g_swapchain_images[i],
+                .buffer = VK_NULL_HANDLE,
+            };
+
+            VkMemoryRequirements memReq;
+            pfn_getImageMemReq(device, g_swapchain_images[i], &memReq);
+
+            VkMemoryAllocateInfo allocInfo = {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                .pNext = &dedicatedInfo,
+                .allocationSize = ahbProps.allocationSize,
+                .memoryTypeIndex = find_memory_type(ahbProps.memoryTypeBits,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+            };
+
+            r = pfn_allocMemory(device, &allocInfo, NULL, &g_swapchain_memory[i]);
+            if (r != VK_SUCCESS) {
+                LOGE("vkAllocateMemory[%u] (AHB import) failed: %d", i, r);
+                destroy_swapchain_images();
+                return r;
+            }
+            r = pfn_bindImageMemory(device, g_swapchain_images[i], g_swapchain_memory[i], 0);
+            if (r != VK_SUCCESS) {
+                LOGE("vkBindImageMemory[%u] failed: %d", i, r);
+                destroy_swapchain_images();
+                return r;
+            }
+
+            g_swapchain_dmabuf_fds[i] = -1;
+            LOGI("Swapchain image[%u]: VkImage=%p (AHB import, system driver)", i,
+                 (void*)(uintptr_t)g_swapchain_images[i]);
+
+        } else {
+            VkSubresourceLayout drmLayout = {
+                .offset = 0,
+                .size = 0,
+                .rowPitch = g_swapchain_strides[i] * 4,
+                .arrayPitch = 0,
+                .depthPitch = 0,
+            };
+
+            typedef struct {
+                VkStructureType sType;
+                const void* pNext;
+                uint64_t drmFormatModifier;
+                uint32_t drmFormatModifierPlaneCount;
+                const VkSubresourceLayout* pPlaneLayouts;
+            } VkImageDrmFormatModifierExplicitCreateInfoEXT;
+
+            VkImageDrmFormatModifierExplicitCreateInfoEXT drmModInfo = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+                .pNext = NULL,
+                .drmFormatModifier = 0,
+                .drmFormatModifierPlaneCount = 1,
+                .pPlaneLayouts = &drmLayout,
+            };
+
+            if (!pfn_ahb_getNativeHandle) {
+                pfn_ahb_getNativeHandle = (PFN_AHardwareBuffer_getNativeHandle)
+                    dlsym(RTLD_DEFAULT, "AHardwareBuffer_getNativeHandle");
+            }
+            if (!pfn_ahb_getNativeHandle) {
+                LOGE("AHardwareBuffer_getNativeHandle not available");
+                destroy_swapchain_images();
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
+            const native_handle_t* handle = pfn_ahb_getNativeHandle(g_swapchain_ahbs[i]);
+            if (!handle || handle->numFds < 1) {
+                LOGE("AHB[%u] has no native handle fds", i);
+                destroy_swapchain_images();
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
+            int dmabuf_fd = handle->data[0];
+            g_swapchain_dmabuf_fds[i] = dmabuf_fd;
+            LOGI("AHB[%u] dmabuf fd=%d", i, dmabuf_fd);
+
+            VkExternalMemoryImageCreateInfo extImgInfo = {
+                .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+                .pNext = &drmModInfo,
+                .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+            };
+
+            VkImageCreateInfo imgInfo = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .pNext = &extImgInfo,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = VK_FORMAT_R8G8B8A8_UNORM,
+                .extent = { pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, 1 },
+                .mipLevels = 1,
+                .arrayLayers = pCreateInfo->imageArrayLayers,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+                .usage = pCreateInfo->imageUsage,
+                .sharingMode = pCreateInfo->imageSharingMode,
+                .queueFamilyIndexCount = pCreateInfo->queueFamilyIndexCount,
+                .pQueueFamilyIndices = pCreateInfo->pQueueFamilyIndices,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            };
+
+            r = pfn_createImage(device, &imgInfo, NULL, &g_swapchain_images[i]);
+            if (r != VK_SUCCESS) {
+                LOGE("vkCreateImage[%u] (dmabuf) failed: %d", i, r);
+                destroy_swapchain_images();
+                return r;
+            }
+
+            typedef struct {
+                VkStructureType sType;
+                const void* pNext;
+                VkExternalMemoryHandleTypeFlagBits handleType;
+                int fd;
+            } VkImportMemoryFdInfoKHR;
+
+            int import_fd = dup(g_swapchain_dmabuf_fds[i]);
+            if (import_fd < 0) {
+                LOGE("dup dmabuf fd[%u] failed: %s", i, strerror(errno));
+                destroy_swapchain_images();
+                return VK_ERROR_OUT_OF_HOST_MEMORY;
+            }
+
+            VkImportMemoryFdInfoKHR importFdInfo = {
+                .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                .pNext = NULL,
+                .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                .fd = import_fd,
+            };
+
+            typedef struct {
+                VkStructureType sType;
+                const void* pNext;
+                VkImage image;
+                VkBuffer buffer;
+            } VkMemoryDedicatedAllocateInfo;
+
+            VkMemoryDedicatedAllocateInfo dedicatedInfo = {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+                .pNext = &importFdInfo,
+                .image = g_swapchain_images[i],
+                .buffer = VK_NULL_HANDLE,
+            };
+
+            VkMemoryRequirements memReq;
+            pfn_getImageMemReq(device, g_swapchain_images[i], &memReq);
+
+            VkMemoryAllocateInfo allocInfo = {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                .pNext = &dedicatedInfo,
+                .allocationSize = memReq.size,
+                .memoryTypeIndex = find_memory_type(memReq.memoryTypeBits,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+            };
+
+            r = pfn_allocMemory(device, &allocInfo, NULL, &g_swapchain_memory[i]);
+            if (r != VK_SUCCESS) {
+                LOGE("vkAllocateMemory[%u] (dmabuf import) failed: %d", i, r);
+                close(import_fd);
+                destroy_swapchain_images();
+                return r;
+            }
+            r = pfn_bindImageMemory(device, g_swapchain_images[i], g_swapchain_memory[i], 0);
+            if (r != VK_SUCCESS) {
+                LOGE("vkBindImageMemory[%u] failed: %d", i, r);
+                destroy_swapchain_images();
+                return r;
+            }
+
+            LOGI("Swapchain image[%u]: VkImage=%p dmabuf_fd=%d stride=%u", i,
+                 (void*)(uintptr_t)g_swapchain_images[i],
+                 g_swapchain_dmabuf_fds[i], g_swapchain_strides[i]);
         }
-        if (!pfn_ahb_getNativeHandle) {
-            LOGE("AHardwareBuffer_getNativeHandle not available");
-            destroy_swapchain_images();
-            return VK_ERROR_INITIALIZATION_FAILED;
-        }
-        const native_handle_t* handle = pfn_ahb_getNativeHandle(g_swapchain_ahbs[i]);
-        if (!handle || handle->numFds < 1) {
-            LOGE("AHB[%u] has no native handle fds", i);
-            destroy_swapchain_images();
-            return VK_ERROR_INITIALIZATION_FAILED;
-        }
-        int dmabuf_fd = handle->data[0];
-        g_swapchain_dmabuf_fds[i] = dmabuf_fd;
-        LOGI("AHB[%u] dmabuf fd=%d", i, dmabuf_fd);
-
-        VkExternalMemoryImageCreateInfo extImgInfo = {
-            .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-            .pNext = &drmModInfo,
-            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-        };
-
-        VkImageCreateInfo imgInfo = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext = &extImgInfo,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = VK_FORMAT_R8G8B8A8_UNORM,
-            .extent = { pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, 1 },
-            .mipLevels = 1,
-            .arrayLayers = pCreateInfo->imageArrayLayers,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
-            .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
-            .usage = pCreateInfo->imageUsage,
-            .sharingMode = pCreateInfo->imageSharingMode,
-            .queueFamilyIndexCount = pCreateInfo->queueFamilyIndexCount,
-            .pQueueFamilyIndices = pCreateInfo->pQueueFamilyIndices,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-
-        r = pfn_createImage(device, &imgInfo, NULL, &g_swapchain_images[i]);
-        if (r != VK_SUCCESS) {
-            LOGE("vkCreateImage[%u] (dmabuf) failed: %d", i, r);
-            destroy_swapchain_images();
-            return r;
-        }
-
-        typedef struct {
-            VkStructureType sType;
-            const void* pNext;
-            VkExternalMemoryHandleTypeFlagBits handleType;
-            int fd;
-        } VkImportMemoryFdInfoKHR;
-
-        int import_fd = dup(g_swapchain_dmabuf_fds[i]);
-        if (import_fd < 0) {
-            LOGE("dup dmabuf fd[%u] failed: %s", i, strerror(errno));
-            destroy_swapchain_images();
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        }
-
-        VkImportMemoryFdInfoKHR importFdInfo = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
-            .pNext = NULL,
-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-            .fd = import_fd,
-        };
-
-        typedef struct {
-            VkStructureType sType;
-            const void* pNext;
-            VkImage image;
-            VkBuffer buffer;
-        } VkMemoryDedicatedAllocateInfo;
-
-        VkMemoryDedicatedAllocateInfo dedicatedInfo = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-            .pNext = &importFdInfo,
-            .image = g_swapchain_images[i],
-            .buffer = VK_NULL_HANDLE,
-        };
-
-        VkMemoryRequirements memReq;
-        pfn_getImageMemReq(device, g_swapchain_images[i], &memReq);
-
-        VkMemoryAllocateInfo allocInfo = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = &dedicatedInfo,
-            .allocationSize = memReq.size,
-            .memoryTypeIndex = find_memory_type(memReq.memoryTypeBits,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-        };
-
-        r = pfn_allocMemory(device, &allocInfo, NULL, &g_swapchain_memory[i]);
-        if (r != VK_SUCCESS) {
-            LOGE("vkAllocateMemory[%u] (dmabuf import) failed: %d", i, r);
-            close(import_fd);
-            destroy_swapchain_images();
-            return r;
-        }
-        r = pfn_bindImageMemory(device, g_swapchain_images[i], g_swapchain_memory[i], 0);
-        if (r != VK_SUCCESS) {
-            LOGE("vkBindImageMemory[%u] failed: %d", i, r);
-            destroy_swapchain_images();
-            return r;
-        }
-
-        LOGI("Swapchain image[%u]: VkImage=%p dmabuf_fd=%d stride=%u", i,
-             (void*)(uintptr_t)g_swapchain_images[i],
-             g_swapchain_dmabuf_fds[i], g_swapchain_strides[i]);
     }
 
 finish:
@@ -1452,17 +1691,19 @@ static VkResult shim_vkCreateDevice(
         newExts[newCount++] = "VK_KHR_get_memory_requirements2";
         LOGI("Injecting device ext: VK_KHR_get_memory_requirements2");
     }
-    if (!has_drm_modifier) {
-        newExts[newCount++] = "VK_EXT_image_drm_format_modifier";
-    }
-    if (!has_ext_mem_fd) {
-        newExts[newCount++] = "VK_KHR_external_memory_fd";
-    }
-    if (!has_ext_mem_dmabuf) {
-        newExts[newCount++] = "VK_EXT_external_memory_dma_buf";
-    }
-    if (!has_image_format_list) {
-        newExts[newCount++] = "VK_KHR_image_format_list";
+    if (!g_using_system_driver) {
+        if (!has_drm_modifier) {
+            newExts[newCount++] = "VK_EXT_image_drm_format_modifier";
+        }
+        if (!has_ext_mem_fd) {
+            newExts[newCount++] = "VK_KHR_external_memory_fd";
+        }
+        if (!has_ext_mem_dmabuf) {
+            newExts[newCount++] = "VK_EXT_external_memory_dma_buf";
+        }
+        if (!has_image_format_list) {
+            newExts[newCount++] = "VK_KHR_image_format_list";
+        }
     }
 
     VkDeviceCreateInfo modInfo = *pCreateInfo;
