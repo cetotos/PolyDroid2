@@ -1,23 +1,29 @@
 package com.cetotos.polydroid2
 
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
-import android.util.DisplayMetrics
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import android.widget.TextView
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -33,13 +39,15 @@ class SettingsActivity : AppCompatActivity() {
         const val VULKAN_DRIVER_AUTO = "auto"
         const val VULKAN_DRIVER_SYSTEM = "system"
         const val VULKAN_DRIVER_TURNIP = "turnip"
+        const val KEY_LAST_LOG_SEND = "last_log_send_time"
+        const val LOG_SEND_COOLDOWN = 180 * 1000L
         const val DEFAULT_RESOLUTION = 720
         const val DEFAULT_SENSITIVITY = 3f
+        // whoever is reading this, please, dont spam the webhook. Thanks
+        private const val WEBHOOK_URL = "https://discord.com/api/webhooks/1492893841915904120/1eGfbBbhAK76Q7yzJs8ilxxjE00nDVY8-cBNY4yPJxROOoMqaMySXQUI9VavagVfwpx5"
 
         private val PRESETS = listOf(
-            240 to "240p",
-            360 to "360p",
-            480 to "480p",
+            480 to "480p", // 480p is basically the minimum until thing start breaking
             720 to "720p (Default)",
             900 to "900p",
             1080 to "1080p",
@@ -252,6 +260,22 @@ class SettingsActivity : AppCompatActivity() {
             prefs.edit().putString(KEY_VULKAN_DRIVER, driverOptions[position].first).apply()
         }
 
+        val sendLogsButton = MaterialButton(this).apply {
+            text = "Send app logs"
+            setOnClickListener {
+                android.app.AlertDialog.Builder(this@SettingsActivity)
+                    .setTitle("Send logs?")
+                    .setMessage("This will send your app logs and Unity logs to the developer which helps to fix bugs. No personal info will be included in logs.")
+                    .setPositiveButton("Send") { _, _ -> sendLogs(this) }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        content.addView(sendLogsButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(24) })
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(toolbar)
@@ -265,6 +289,141 @@ class SettingsActivity : AppCompatActivity() {
             v.setPadding(bars.left, bars.top, bars.right, 0)
             insets
         }
+    }
+
+    private fun sendLogs(button: MaterialButton) {
+        val lastSend = prefs.getLong(KEY_LAST_LOG_SEND, 0)
+        val now = System.currentTimeMillis()
+        if (now - lastSend < LOG_SEND_COOLDOWN) {
+            val remaining = ((LOG_SEND_COOLDOWN - (now - lastSend)) / 1000).toInt()
+            Toast.makeText(this, "Please wait ${remaining}s before sending again", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        button.isEnabled = false
+        button.text = "Sending..."
+
+        Thread {
+            try {
+                runOnUiThread { button.text = "Reading logs..." }
+                // collect Player.log which is where stderr (so the vulkan shim etc.) go to
+                val playerSb = StringBuilder()
+                playerSb.appendLine("------ Device info -----")
+                playerSb.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+                playerSb.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                playerSb.appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
+                playerSb.appendLine("Board: ${Build.BOARD}")
+                playerSb.appendLine("Hardware: ${Build.HARDWARE}")
+                playerSb.appendLine("Vulkan driver: ${getVulkanDriver(this)}")
+                playerSb.appendLine("Resolution: ${getResolution(this)}")
+                playerSb.appendLine()
+
+                val playerLog = File(
+                    filesDir,
+                    "rootfs/home/user/.config/unity3d/Polytoria/Polytoria Client/Player.log"
+                )
+                if (playerLog.exists()) {
+                    val lines = playerLog.readLines()
+                    val start = (lines.size - 5000).coerceAtLeast(0)
+                    for (i in start until lines.size) {
+                        val line = lines[i]
+                        // filter Box64's signal spam
+                        if (line.contains("sigaction handler for sig ")) continue
+                        if (line.contains("Signal ") && line.contains("si_addr=")) continue
+                        if (line.contains("Warning, calling Signal ") && line.contains("SIG_IGN")) continue
+                        playerSb.appendLine(line)
+                    }
+                } else {
+                    playerSb.appendLine("Player.log not found")
+                }
+                val playerBytes = playerSb.toString().toByteArray(Charsets.UTF_8)
+
+                // collect logcat
+                val logcatSb = StringBuilder()
+                try {
+                    val proc = Runtime.getRuntime().exec(arrayOf(
+                        "logcat", "-d", "-v", "time",
+                        "PolyDroid2:*", "PolyDroid2-Vulkan:*", "PolyDroid2-window:*",
+                        "Box64:*", "BOX64:*",
+                        "*:S"
+                    ))
+                    val allLines = proc.inputStream.bufferedReader().readLines()
+                    proc.waitFor()
+
+                    val start = (allLines.size - 1000).coerceAtLeast(0)
+                    for (i in start until allLines.size) {
+                        logcatSb.appendLine(allLines[i])
+                    }
+
+                    if (allLines.isEmpty()) {
+                        logcatSb.appendLine("No matching logcat entries found")
+                    }
+                } catch (e: Exception) {
+                    logcatSb.appendLine("Failed to read logcat: ${e.message}")
+                }
+                val logcatBytes = logcatSb.toString().toByteArray(Charsets.UTF_8)
+
+                runOnUiThread { button.text = "Sending..." }
+
+                val boundary = "----PolyDroid${System.currentTimeMillis()}"
+                val message = "${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} | ${Build.HARDWARE}"
+
+                val body = java.io.ByteArrayOutputStream()
+                fun writePart(s: String) { body.write(s.toByteArray(Charsets.UTF_8)) }
+
+                writePart("--$boundary\r\n")
+                writePart("Content-Disposition: form-data; name=\"content\"\r\n\r\n")
+                writePart("$message\r\n")
+
+                writePart("--$boundary\r\n")
+                writePart("Content-Disposition: form-data; name=\"files[0]\"; filename=\"player.log\"\r\n")
+                writePart("Content-Type: text/plain\r\n\r\n")
+                body.write(playerBytes)
+                writePart("\r\n")
+
+                writePart("--$boundary\r\n")
+                writePart("Content-Disposition: form-data; name=\"files[1]\"; filename=\"logcat.log\"\r\n")
+                writePart("Content-Type: text/plain\r\n\r\n")
+                body.write(logcatBytes)
+                writePart("\r\n")
+
+                writePart("--$boundary--\r\n")
+
+                val bodyBytes = body.toByteArray()
+
+                val url = URL(WEBHOOK_URL)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                conn.setRequestProperty("Content-Length", bodyBytes.size.toString())
+                conn.setFixedLengthStreamingMode(bodyBytes.size)
+                conn.connectTimeout = 20000
+                conn.readTimeout = 20000
+
+                conn.outputStream.use { it.write(bodyBytes) }
+                val responseCode = conn.responseCode
+                conn.disconnect()
+
+                runOnUiThread {
+                    if (responseCode in 200..299) {
+                        prefs.edit().putLong(KEY_LAST_LOG_SEND, System.currentTimeMillis()).apply()
+                        Toast.makeText(this, "Logs sent!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Failed to send! got HTTP error: $responseCode", Toast.LENGTH_SHORT).show()
+                    }
+                    button.isEnabled = true
+                    button.text = "Send app logs"
+                }
+            } catch (e: Exception) {
+                Log.e("PolyDroid2", "failed to send logs: ${e.message}", e)
+                runOnUiThread {
+                    Toast.makeText(this, "Failed with: ${e.message}", Toast.LENGTH_SHORT).show()
+                    button.isEnabled = true
+                    button.text = "Send app logs"
+                }
+            }
+        }.start()
     }
 
     private fun dp(value: Int): Int =
