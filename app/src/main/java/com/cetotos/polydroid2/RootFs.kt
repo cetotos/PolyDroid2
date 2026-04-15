@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 object RootFs {
     private const val TAG = "PolyDroid2"
     private const val VERSION = 6
-    private const val LIBS_VERSION = 1
+    private const val LIBS_VERSION = 3
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",
@@ -394,6 +394,7 @@ object RootFs {
         } catch (e: Exception) {
             Log.w(TAG, "Unity crash fix not found: ${e.message}")
         }
+
 
         try {
             copyAssetCounted(ctx, "x86_64-libs/libX11_stub.so", File(x86LibDir, "libX11.so.6"), progress)
