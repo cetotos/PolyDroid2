@@ -4,10 +4,14 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import kotlin.concurrent.thread
 
 class LauncherActivity : AppCompatActivity() {
 
@@ -38,6 +42,42 @@ class LauncherActivity : AppCompatActivity() {
 
         findViewById<android.view.View>(R.id.btn_settings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        if (RootFs.needsExtraction(this)) {
+            val detailBar = ProgressBar(
+                this, null, android.R.attr.progressBarStyleHorizontal
+            ).apply {
+                isIndeterminate = false
+                max = 100
+                progress = 0
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val dialogView = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(64, 48, 64, 48)
+                addView(detailBar)
+            }
+            val dialog = MaterialAlertDialogBuilder(this)
+                .setTitle("Extracting files...")
+                .setView(dialogView)
+                .setCancelable(false)
+                .create()
+            dialog.setCanceledOnTouchOutside(false)
+            dialog.show()
+
+            thread {
+                RootFs.extractAll(this) { detailPct, _, _, stageLabel ->
+                    runOnUiThread {
+                        dialog.setTitle(stageLabel)
+                        detailBar.progress = detailPct
+                    }
+                }
+                runOnUiThread { dialog.dismiss() }
+            }
         }
     }
 

@@ -199,14 +199,6 @@ class GameActivity : AppCompatActivity() {
         thread {
             Looper.prepare()
 
-            // extract rootfs if not extracted
-            if (!RootFs.isInstalled(this)) {
-                appendLog("Extracting rootfs...")
-                RootFs.install(this) { msg -> appendLog(msg) }
-            } else {
-                appendLog("Rootfs already installed.")
-            }
-
             val rootPath = RootFs.rootDir(this).absolutePath
             val tmpDir = "$rootPath/tmp"
             java.io.File(tmpDir).mkdirs()
