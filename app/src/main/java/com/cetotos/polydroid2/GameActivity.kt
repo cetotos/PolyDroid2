@@ -33,6 +33,7 @@ class GameActivity : AppCompatActivity() {
     private lateinit var scrollView: ScrollView
     private lateinit var statsView: TextView
     private lateinit var lorieView: LorieView
+    private lateinit var imeCapture: ImeCaptureView
     private lateinit var vulkanSurface: SurfaceView
     private var inputHandler: TouchInputHandler? = null
     private var cmdEntryPoint: CmdEntryPoint? = null
@@ -181,6 +182,30 @@ class GameActivity : AppCompatActivity() {
             statsView.visibility = android.view.View.GONE
         }
 
+        imeCapture = ImeCaptureView(this)
+        imeCapture.sendKey = { sc, kc, down -> nativeSendKeyEvent(sc, kc, down) }
+        frame.addView(imeCapture, FrameLayout.LayoutParams(1, 1))
+
+        val density = resources.displayMetrics.density
+        val kbSize = (64 * density).toInt()
+        val kbButton = TextView(this).apply {
+            text = "IME"
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0x99000000.toInt())
+            isClickable = true
+            isFocusable = false
+            translationX = -120f * density
+            setOnClickListener {
+                toggleSoftKeyboard()
+            }
+        }
+        val kbParams = FrameLayout.LayoutParams(kbSize, kbSize).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        }
+        frame.addView(kbButton, kbParams)
+
         setContentView(frame)
 
 
@@ -298,6 +323,10 @@ class GameActivity : AppCompatActivity() {
             Box64Launcher.stop()
         }
         wakeLock?.let { if (it.isHeld) it.release() }
+    }
+
+    private fun toggleSoftKeyboard() {
+        imeCapture.switchKeyboardState()
     }
 
     private fun appendLog(msg: String) {

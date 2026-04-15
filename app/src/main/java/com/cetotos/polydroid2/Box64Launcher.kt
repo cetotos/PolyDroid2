@@ -23,6 +23,7 @@ object Box64Launcher {
         File(root, "polytoria/unity.lock").delete()
         File("$rootPath/tmp").mkdirs()
         File("$rootPath/tmp/.X11-unix").apply { mkdirs(); setReadable(true, false); setExecutable(true, false); setWritable(true, false) }
+
         File("$rootPath/home/user").mkdirs()
         File("$rootPath/proc").mkdirs()
         File("$rootPath/dev").mkdirs()
