@@ -487,7 +487,7 @@ static VkResult shim_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     if (sh) h = (uint32_t)atoi(sh);
 
     *pCapabilities = (VkSurfaceCapabilitiesKHR){
-        .minImageCount = 2,
+        .minImageCount = 3,
         .maxImageCount = 3,
         .currentExtent = { w, h },
         .minImageExtent = { w, h },
@@ -731,6 +731,13 @@ static PFN_vkDestroyFence_t pfn_destroyFence = NULL;
 static PFN_vkWaitForFences_t pfn_waitForFences = NULL;
 static PFN_vkResetFences_t pfn_resetFences = NULL;
 static PFN_vkResetCommandBuffer_t pfn_resetCmdBuf = NULL;
+typedef VkResult (VKAPI_PTR *PFN_vkCreateSemaphore_t)(VkDevice, const VkSemaphoreCreateInfo*, const VkAllocationCallbacks*, VkSemaphore*);
+typedef void (VKAPI_PTR *PFN_vkDestroySemaphore_t)(VkDevice, VkSemaphore, const VkAllocationCallbacks*);
+typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreFdKHR_t)(VkDevice, const VkSemaphoreGetFdInfoKHR*, int*);
+static PFN_vkCreateSemaphore_t pfn_createSemaphore = NULL;
+static PFN_vkDestroySemaphore_t pfn_destroySemaphore = NULL;
+static PFN_vkGetSemaphoreFdKHR_t pfn_getSemaphoreFdKHR = NULL;
+static VkSemaphore g_present_semaphores[16] = {0};
 static VkPhysicalDevice g_physical_device = VK_NULL_HANDLE;
 static VkQueue g_queue = VK_NULL_HANDLE;
 
@@ -768,6 +775,9 @@ static void resolve_device_funcs(VkDevice device) {
     pfn_waitForFences = (PFN_vkWaitForFences_t)gdpa(device, "vkWaitForFences");
     pfn_resetFences = (PFN_vkResetFences_t)gdpa(device, "vkResetFences");
     pfn_resetCmdBuf = (PFN_vkResetCommandBuffer_t)gdpa(device, "vkResetCommandBuffer");
+    pfn_createSemaphore = (PFN_vkCreateSemaphore_t)gdpa(device, "vkCreateSemaphore");
+    pfn_destroySemaphore = (PFN_vkDestroySemaphore_t)gdpa(device, "vkDestroySemaphore");
+    pfn_getSemaphoreFdKHR = (PFN_vkGetSemaphoreFdKHR_t)gdpa(device, "vkGetSemaphoreFdKHR");
 
     LOGI("Device funcs resolved: createImage=%p queueSubmit=%p cmdCopyImage=%p",
          (void*)pfn_createImage, (void*)pfn_queueSubmit, (void*)pfn_cmdCopyImage);
@@ -1112,7 +1122,7 @@ static VkResult shim_vkCreateSwapchainKHR(
     g_swapchain_height = pCreateInfo->imageExtent.height;
 
     uint32_t count = pCreateInfo->minImageCount;
-    if (count < 2) count = 2;
+    if (count < 3) count = 3;
     if (count > SHIM_MAX_SWAPCHAIN_IMAGES) count = SHIM_MAX_SWAPCHAIN_IMAGES;
 
     uint32_t ahb_format = vkformat_to_ahb(pCreateInfo->imageFormat);
@@ -1455,6 +1465,31 @@ finish:
         LOGI("Created %u present fences", count);
     }
 
+    for (uint32_t i = 0; i < 16; i++) {
+        if (g_present_semaphores[i] && pfn_destroySemaphore) {
+            pfn_destroySemaphore(device, g_present_semaphores[i], NULL);
+            g_present_semaphores[i] = VK_NULL_HANDLE;
+        }
+    }
+    if (pfn_createSemaphore && pfn_getSemaphoreFdKHR) {
+        VkExportSemaphoreCreateInfo exportInfo = {
+            .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+            .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+        };
+        VkSemaphoreCreateInfo sci = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &exportInfo,
+        };
+        for (uint32_t i = 0; i < count; i++) {
+            if (pfn_createSemaphore(device, &sci, NULL, &g_present_semaphores[i]) != VK_SUCCESS) {
+                g_present_semaphores[i] = VK_NULL_HANDLE;
+            }
+        }
+        LOGI("Created %u exportable present semaphores", count);
+    } else {
+        LOGI("vkGetSemaphoreFdKHR not available - async fences disabled");
+    }
+
     LOGI("Swapchain created: handle=%p %u images%s, %ux%u, fmt=%u",
          (void*)(uintptr_t)*pSwapchain, count,
          g_swapchain_has_dmabuf ? " (AHB-backed)" : " (plain)",
@@ -1478,6 +1513,12 @@ static void shim_vkDestroySwapchainKHR(
         if (g_present_fences[i] && pfn_destroyFence) {
             pfn_destroyFence(device, g_present_fences[i], NULL);
             g_present_fences[i] = VK_NULL_HANDLE;
+        }
+    }
+    for (uint32_t i = 0; i < 16; i++) {
+        if (g_present_semaphores[i] && pfn_destroySemaphore) {
+            pfn_destroySemaphore(device, g_present_semaphores[i], NULL);
+            g_present_semaphores[i] = VK_NULL_HANDLE;
         }
     }
 
@@ -1571,6 +1612,9 @@ static VkResult shim_vkQueuePresentKHR(
             pfn_resetFences(g_device, 1, &presentFence);
         }
 
+        VkSemaphore exportSem = g_present_semaphores[imgIdx];
+        int doSignalExport = (exportSem != VK_NULL_HANDLE && pfn_getSemaphoreFdKHR != NULL);
+
         if (pPresentInfo->waitSemaphoreCount > 0 && pfn_queueSubmit) {
             static const VkPipelineStageFlags waitStages[8] = {
                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
@@ -1585,26 +1629,62 @@ static VkResult shim_vkQueuePresentKHR(
                 .waitSemaphoreCount = waitCount,
                 .pWaitSemaphores = pPresentInfo->pWaitSemaphores,
                 .pWaitDstStageMask = waitStages,
+                .signalSemaphoreCount = doSignalExport ? 1 : 0,
+                .pSignalSemaphores = doSignalExport ? &exportSem : NULL,
             };
             pfn_queueSubmit(queue, 1, &submit, presentFence);
-        } else if (presentFence) {
-            VkSubmitInfo empty = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO };
+        } else if (presentFence || doSignalExport) {
+            VkSubmitInfo empty = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .signalSemaphoreCount = doSignalExport ? 1 : 0,
+                .pSignalSemaphores = doSignalExport ? &exportSem : NULL,
+            };
             if (pfn_queueSubmit) pfn_queueSubmit(queue, 1, &empty, presentFence);
         }
 
-        // we need to tell compositor to wait for GPU when sending frames,
-        // otherwise it will stutter. this is as an issue only on system driver (atleast the adreno one, i dont know about mali)
-        if (g_using_system_driver && presentFence && pfn_waitForFences) {
+        int acquireFd = -1;
+        if (doSignalExport) {
+            VkSemaphoreGetFdInfoKHR gi = {
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+                .semaphore = exportSem,
+                .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+            };
+            if (pfn_getSemaphoreFdKHR(g_device, &gi, &acquireFd) != VK_SUCCESS) {
+                acquireFd = -1;
+            }
+        }
+
+        // fallback: if we cant hand surfaceflinger an async fence, block here
+        if (acquireFd < 0 && g_using_system_driver && presentFence && pfn_waitForFences) {
             pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
         }
 
         if (g_swapchain_has_dmabuf && g_compositor_sock >= 0) {
             uint32_t msg[2] = { imgIdx, unity_fps };
-            if (send(g_compositor_sock, msg, sizeof(msg), MSG_NOSIGNAL) != sizeof(msg)) {
+            struct iovec iov = { .iov_base = msg, .iov_len = sizeof(msg) };
+            char cmsgBuf[CMSG_SPACE(sizeof(int))];
+            struct msghdr mh;
+            memset(&mh, 0, sizeof(mh));
+            mh.msg_iov = &iov;
+            mh.msg_iovlen = 1;
+            if (acquireFd >= 0) {
+                mh.msg_control = cmsgBuf;
+                mh.msg_controllen = sizeof(cmsgBuf);
+                struct cmsghdr *c = CMSG_FIRSTHDR(&mh);
+                c->cmsg_level = SOL_SOCKET;
+                c->cmsg_type = SCM_RIGHTS;
+                c->cmsg_len = CMSG_LEN(sizeof(int));
+                memcpy(CMSG_DATA(c), &acquireFd, sizeof(int));
+            }
+            ssize_t sent = sendmsg(g_compositor_sock, &mh, MSG_NOSIGNAL);
+            if (acquireFd >= 0) close(acquireFd);
+            if (sent != (ssize_t)sizeof(msg)) {
                 LOGE("Failed to send frame to compositor: %s", strerror(errno));
                 close(g_compositor_sock);
                 g_compositor_sock = -1;
             }
+        } else if (acquireFd >= 0) {
+            close(acquireFd);
         }
 
         if (pPresentInfo->pResults)

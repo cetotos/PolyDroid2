@@ -215,6 +215,10 @@ void ASurfaceTransaction_setGeometry(ASurfaceTransaction* transaction,
                                      const ARect* source,
                                      const ARect* destination,
                                      int32_t transform);
+#define ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE 1
+void ASurfaceTransaction_setBufferTransparency(ASurfaceTransaction* transaction,
+                                               ASurfaceControl* surface_control,
+                                               int8_t transparency);
 
 typedef struct native_handle {
     int version;
@@ -273,8 +277,7 @@ static void* compositor_thread(void* arg) {
                 .format = format,
                 .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
                          AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-                         AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY |
-                         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+                         AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY,
                 .stride = 0,
                 .rfu0 = 0,
                 .rfu1 = 0,
@@ -330,6 +333,11 @@ static void* compositor_thread(void* arg) {
         ASurfaceTransaction* txn = ASurfaceTransaction_create();
         ASurfaceTransaction_setVisibility(txn, g_surface_ctl, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
         ASurfaceTransaction_setZOrder(txn, g_surface_ctl, 1);
+        void *fn_opaque = dlsym(RTLD_DEFAULT, "ASurfaceTransaction_setBufferTransparency");
+        if (fn_opaque) {
+            ((void(*)(ASurfaceTransaction*, ASurfaceControl*, int8_t))fn_opaque)(
+                txn, g_surface_ctl, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
+        }
         ASurfaceTransaction_apply(txn);
         ASurfaceTransaction_delete(txn);
 
@@ -371,15 +379,34 @@ static void* compositor_thread(void* arg) {
 
         while (1) {
             uint32_t msg[2];
-            n = recv(client_fd, msg, sizeof(msg), MSG_WAITALL);
-            if (n != sizeof(msg)) break;
+            struct iovec iov = { .iov_base = msg, .iov_len = sizeof(msg) };
+            char cmsgBuf[CMSG_SPACE(sizeof(int))];
+            struct msghdr mh;
+            memset(&mh, 0, sizeof(mh));
+            mh.msg_iov = &iov;
+            mh.msg_iovlen = 1;
+            mh.msg_control = cmsgBuf;
+            mh.msg_controllen = sizeof(cmsgBuf);
+            n = recvmsg(client_fd, &mh, MSG_WAITALL);
+            if (n != (ssize_t)sizeof(msg)) break;
+
+            int acquire_fd = -1;
+            for (struct cmsghdr *c = CMSG_FIRSTHDR(&mh); c != NULL; c = CMSG_NXTHDR(&mh, c)) {
+                if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
+                    memcpy(&acquire_fd, CMSG_DATA(c), sizeof(int));
+                }
+            }
+
             uint32_t img_idx = msg[0];
             atomic_store(&g_unity_fps, (int)msg[1]);
-            if (img_idx >= g_comp_ahb_count) continue;
+            if (img_idx >= g_comp_ahb_count) {
+                if (acquire_fd >= 0) close(acquire_fd);
+                continue;
+            }
 
             AHardwareBuffer* ahb = g_comp_ahbs[img_idx];
 
-            ASurfaceTransaction_setBuffer(txn, g_surface_ctl, ahb, -1);
+            ASurfaceTransaction_setBuffer(txn, g_surface_ctl, ahb, acquire_fd);
             if (!geometry_set) {
                 ASurfaceTransaction_setGeometry(txn, g_surface_ctl, &src, &dst,
                                                 ANATIVEWINDOW_TRANSFORM_IDENTITY);
