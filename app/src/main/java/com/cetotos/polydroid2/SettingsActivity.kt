@@ -6,10 +6,13 @@ import android.os.Bundle
 import android.text.InputType
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -19,6 +22,7 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
+import com.google.android.material.tabs.TabLayout
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import java.io.File
@@ -35,6 +39,7 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_CUSTOM_HEIGHT = "custom_height"
         const val KEY_CAMERA_SENSITIVITY = "camera_sensitivity"
         const val KEY_SHOW_STATS = "show_stats"
+        const val KEY_FULLSCREEN = "fullscreen"
         const val KEY_VULKAN_DRIVER = "vulkan_driver"
         const val VULKAN_DRIVER_AUTO = "auto"
         const val VULKAN_DRIVER_SYSTEM = "system"
@@ -43,6 +48,29 @@ class SettingsActivity : AppCompatActivity() {
         const val LOG_SEND_COOLDOWN = 180 * 1000L
         const val DEFAULT_RESOLUTION = 720
         const val DEFAULT_SENSITIVITY = 3f
+
+        const val KEY_JOYSTICK_X = "overlay_joystick_x"
+        const val KEY_JOYSTICK_Y = "overlay_joystick_y"
+        const val KEY_JOYSTICK_SCALE = "overlay_joystick_scale"
+        const val KEY_JUMP_X = "overlay_jump_x"
+        const val KEY_JUMP_Y = "overlay_jump_y"
+        const val KEY_JUMP_SCALE = "overlay_jump_scale"
+        const val KEY_IME_X = "overlay_ime_x"
+        const val KEY_IME_Y = "overlay_ime_y"
+        const val KEY_IME_SCALE = "overlay_ime_scale"
+        const val KEY_ITEMBAR_X = "overlay_itembar_x"
+        const val KEY_ITEMBAR_Y = "overlay_itembar_y"
+        const val KEY_ITEMBAR_SCALE = "overlay_itembar_scale"
+
+        const val DEFAULT_JOYSTICK_X = 0.13f
+        const val DEFAULT_JOYSTICK_Y = 0.72f
+        const val DEFAULT_JUMP_X = 0.91f
+        const val DEFAULT_JUMP_Y = 0.80f
+        const val DEFAULT_IME_X = 0.36f
+        const val DEFAULT_IME_Y = 0.94f
+        const val DEFAULT_ITEMBAR_X = 0.5f
+        const val DEFAULT_ITEMBAR_Y = 0.08f
+
         // whoever is reading this, please, dont spam the webhook. Thanks
         private const val WEBHOOK_URL = "https://discord.com/api/webhooks/1492893841915904120/1eGfbBbhAK76Q7yzJs8ilxxjE00nDVY8-cBNY4yPJxROOoMqaMySXQUI9VavagVfwpx5"
 
@@ -54,6 +82,8 @@ class SettingsActivity : AppCompatActivity() {
             1440 to "1440p",
         )
 
+        data class OverlayButton(val xFrac: Float, val yFrac: Float, val scale: Float)
+
         fun getCameraSensitivity(ctx: Context): Float {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             return prefs.getFloat(KEY_CAMERA_SENSITIVITY, DEFAULT_SENSITIVITY)
@@ -64,9 +94,14 @@ class SettingsActivity : AppCompatActivity() {
             return prefs.getBoolean(KEY_SHOW_STATS, true)
         }
 
+        fun getFullscreen(ctx: Context): Boolean {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs.getBoolean(KEY_FULLSCREEN, true)
+        }
+
         fun getVulkanDriver(ctx: Context): String {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            return prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_AUTO) ?: VULKAN_DRIVER_AUTO
+            return prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_SYSTEM) ?: VULKAN_DRIVER_SYSTEM
         }
 
         fun getResolution(ctx: Context): Triple<Boolean, Int, Int> {
@@ -80,6 +115,42 @@ class SettingsActivity : AppCompatActivity() {
                 val shortEdge = prefs.getInt(KEY_RESOLUTION, DEFAULT_RESOLUTION)
                 Triple(false, shortEdge, 0)
             }
+        }
+
+        fun getOverlayJoystick(ctx: Context): OverlayButton {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return OverlayButton(
+                p.getFloat(KEY_JOYSTICK_X, DEFAULT_JOYSTICK_X),
+                p.getFloat(KEY_JOYSTICK_Y, DEFAULT_JOYSTICK_Y),
+                p.getFloat(KEY_JOYSTICK_SCALE, 1f),
+            )
+        }
+
+        fun getOverlayJump(ctx: Context): OverlayButton {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return OverlayButton(
+                p.getFloat(KEY_JUMP_X, DEFAULT_JUMP_X),
+                p.getFloat(KEY_JUMP_Y, DEFAULT_JUMP_Y),
+                p.getFloat(KEY_JUMP_SCALE, 1f),
+            )
+        }
+
+        fun getOverlayIme(ctx: Context): OverlayButton {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return OverlayButton(
+                p.getFloat(KEY_IME_X, DEFAULT_IME_X),
+                p.getFloat(KEY_IME_Y, DEFAULT_IME_Y),
+                p.getFloat(KEY_IME_SCALE, 1f),
+            )
+        }
+
+        fun getOverlayItemBar(ctx: Context): OverlayButton {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return OverlayButton(
+                p.getFloat(KEY_ITEMBAR_X, DEFAULT_ITEMBAR_X),
+                p.getFloat(KEY_ITEMBAR_Y, DEFAULT_ITEMBAR_Y),
+                p.getFloat(KEY_ITEMBAR_SCALE, 1f),
+            )
         }
     }
 
@@ -95,12 +166,66 @@ class SettingsActivity : AppCompatActivity() {
             setNavigationOnClickListener { finish() }
         }
 
+        val tabLayout = TabLayout(this).apply {
+            tabMode = TabLayout.MODE_FIXED
+            tabGravity = TabLayout.GRAVITY_FILL
+            addTab(newTab().setText("Graphics"))
+            addTab(newTab().setText("Controls"))
+            addTab(newTab().setText("Other"))
+        }
+
+        val container = FrameLayout(this)
+
+        val pages = listOf(
+            buildGraphicsTab(),
+            buildControlsTab(),
+            buildOtherTab(),
+        )
+        for ((idx, page) in pages.withIndex()) {
+            container.addView(
+                page,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+            page.visibility = if (idx == 0) View.VISIBLE else View.GONE
+        }
+
+        fun show(i: Int) {
+            for (j in pages.indices) {
+                pages[j].visibility = if (j == i) View.VISIBLE else View.GONE
+            }
+        }
+
+        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) { show(tab.position) }
+            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {}
+        })
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(toolbar)
+            addView(tabLayout)
+            addView(
+                container,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            )
+        }
+
+        setContentView(root)
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left, bars.top, bars.right, 0)
+            insets
+        }
+    }
+
+    private fun buildGraphicsTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(16), dp(24), dp(16))
         }
 
-        // resolution dropdown
         val dropdown = AutoCompleteTextView(this).apply {
             inputType = InputType.TYPE_NULL
             setAdapter(ArrayAdapter(
@@ -197,24 +322,15 @@ class SettingsActivity : AppCompatActivity() {
             false
         }
 
-        val sensitivityLabel = TextView(this).apply {
-            setPadding(0, dp(24), 0, 0)
-            text = "Camera sensitivity: ${"%.1f".format(prefs.getFloat(KEY_CAMERA_SENSITIVITY, DEFAULT_SENSITIVITY))}x"
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
-        }
-        content.addView(sensitivityLabel, layoutParams())
-
-        val sensitivitySlider = Slider(this).apply {
-            valueFrom = 0.5f
-            valueTo = 10f
-            stepSize = 0.5f
-            value = prefs.getFloat(KEY_CAMERA_SENSITIVITY, DEFAULT_SENSITIVITY)
-            addOnChangeListener { _, newVal, _ ->
-                prefs.edit().putFloat(KEY_CAMERA_SENSITIVITY, newVal).apply()
-                sensitivityLabel.text = "Camera sensitivity: ${"%.1f".format(newVal)}x"
+        val fullscreenSwitch = MaterialSwitch(this).apply {
+            text = "Fullscreen mode"
+            setPadding(0, dp(16), 0, 0)
+            isChecked = prefs.getBoolean(KEY_FULLSCREEN, true)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_FULLSCREEN, checked).apply()
             }
         }
-        content.addView(sensitivitySlider, layoutParams())
+        content.addView(fullscreenSwitch, layoutParams())
 
         val statsSwitch = MaterialSwitch(this).apply {
             text = "Performance stats overlay"
@@ -251,13 +367,118 @@ class SettingsActivity : AppCompatActivity() {
         }
         content.addView(driverLayout, layoutParams())
 
-        val currentDriver = prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_AUTO) ?: VULKAN_DRIVER_AUTO
+        val currentDriver = prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_SYSTEM) ?: VULKAN_DRIVER_SYSTEM
         val driverIndex = driverOptions.indexOfFirst { it.first == currentDriver }
         if (driverIndex >= 0) {
             driverDropdown.setText(driverOptions[driverIndex].second, false)
         }
         driverDropdown.setOnItemClickListener { _, _, position, _ ->
             prefs.edit().putString(KEY_VULKAN_DRIVER, driverOptions[position].first).apply()
+        }
+
+        return ScrollView(this).apply { addView(content) }
+    }
+
+    private fun buildControlsTab(): View {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(16))
+        }
+
+        val sensitivityLabel = TextView(this).apply {
+            text = "Camera sensitivity: ${"%.1f".format(prefs.getFloat(KEY_CAMERA_SENSITIVITY, DEFAULT_SENSITIVITY))}x"
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+        }
+        content.addView(sensitivityLabel, layoutParams())
+
+        val sensitivitySlider = Slider(this).apply {
+            valueFrom = 0.5f
+            valueTo = 10f
+            stepSize = 0.5f
+            value = prefs.getFloat(KEY_CAMERA_SENSITIVITY, DEFAULT_SENSITIVITY)
+            addOnChangeListener { _, newVal, _ ->
+                prefs.edit().putFloat(KEY_CAMERA_SENSITIVITY, newVal).apply()
+                sensitivityLabel.text = "Camera sensitivity: ${"%.1f".format(newVal)}x"
+            }
+        }
+        content.addView(sensitivitySlider, layoutParams())
+
+        val editorHeader = TextView(this).apply {
+            text = "Overlay editor"
+            setPadding(0, dp(24), 0, dp(4))
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+        }
+        content.addView(editorHeader, layoutParams())
+
+        val editorHint = TextView(this).apply {
+            text = "Tap a button/joystick, then drag to move or rescale."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setPadding(0, 0, 0, dp(8))
+        }
+        content.addView(editorHint, layoutParams())
+
+        val editor = OverlayEditorView(this)
+        content.addView(editor, layoutParams())
+
+        val scaleLabel = TextView(this).apply {
+            setPadding(0, dp(16), 0, 0)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+        }
+        content.addView(scaleLabel, layoutParams())
+
+        val scaleSlider = Slider(this).apply {
+            valueFrom = 0.5f
+            valueTo = 2f
+            stepSize = 0.05f
+        }
+        content.addView(scaleSlider, layoutParams())
+
+        fun renderScaleLabel(which: OverlayEditorView.Which, scale: Float) {
+            val name = when (which) {
+                OverlayEditorView.Which.JOYSTICK -> "Joystick"
+                OverlayEditorView.Which.JUMP -> "Jump"
+                OverlayEditorView.Which.IME -> "IME"
+                OverlayEditorView.Which.ITEMBAR -> "Item bar"
+            }
+            scaleLabel.text = "$name size: ${"%.2f".format(scale)}x"
+        }
+
+        renderScaleLabel(editor.selected, editor.selectedScale())
+        scaleSlider.value = editor.selectedScale()
+
+        editor.onSelectionChanged = { which, scale ->
+            renderScaleLabel(which, scale)
+            scaleSlider.value = scale.coerceIn(scaleSlider.valueFrom, scaleSlider.valueTo)
+        }
+
+        scaleSlider.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                editor.setSelectedScale(value)
+                renderScaleLabel(editor.selected, value)
+            }
+        }
+
+        val resetButton = MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = "Reset overlay layout"
+            setOnClickListener {
+                editor.resetAll()
+                scaleSlider.value = editor.selectedScale()
+                renderScaleLabel(editor.selected, editor.selectedScale())
+            }
+        }
+        content.addView(resetButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(16) })
+
+        return ScrollView(this).apply { addView(content) }
+    }
+
+    private fun buildOtherTab(): View {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(16))
         }
 
         val sendLogsButton = MaterialButton(this).apply {
@@ -274,21 +495,9 @@ class SettingsActivity : AppCompatActivity() {
         content.addView(sendLogsButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(24) })
+        ))
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(toolbar)
-            addView(content)
-        }
-
-        setContentView(root)
-
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, 0)
-            insets
-        }
+        return ScrollView(this).apply { addView(content) }
     }
 
     private fun sendLogs(button: MaterialButton) {

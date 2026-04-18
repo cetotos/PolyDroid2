@@ -2,12 +2,14 @@ package com.cetotos.polydroid2
 
 import android.content.Context
 import android.text.Editable
+import android.text.InputType
 import android.text.Selection
 import android.text.TextWatcher
 import android.util.AttributeSet
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.appcompat.widget.AppCompatEditText
 
@@ -17,6 +19,7 @@ class ImeCaptureView @JvmOverloads constructor(
 
     companion object {
         private const val FILLER = "                              "
+        private const val SCAN_ENTER = 28
     }
 
     private var internalChange = false
@@ -25,7 +28,26 @@ class ImeCaptureView @JvmOverloads constructor(
     init {
         isFocusable = true
         isFocusableInTouchMode = true
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
         addTextChangedListener(Watcher())
+        setOnEditorActionListener { _, actionId, event ->
+            val isSubmit = actionId == EditorInfo.IME_ACTION_SEND ||
+                    actionId == EditorInfo.IME_ACTION_DONE ||
+                    actionId == EditorInfo.IME_ACTION_GO ||
+                    actionId == EditorInfo.IME_ACTION_NEXT ||
+                    actionId == EditorInfo.IME_ACTION_UNSPECIFIED ||
+                    (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER)
+            if (isSubmit) {
+                val cb = sendKey
+                if (cb != null) {
+                    cb(SCAN_ENTER, KeyEvent.KEYCODE_ENTER, true)
+                    cb(SCAN_ENTER, KeyEvent.KEYCODE_ENTER, false)
+                }
+                disableKeyboard()
+                true
+            } else false
+        }
         clearBuf()
         disable()
     }

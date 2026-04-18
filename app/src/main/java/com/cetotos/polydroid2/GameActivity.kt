@@ -67,6 +67,10 @@ class GameActivity : AppCompatActivity() {
             android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
             android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         )
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        val fullscreenMode = SettingsActivity.getFullscreen(this)
         actionBar?.hide()
         supportActionBar?.hide()
         val metrics = DisplayMetrics()
@@ -75,16 +79,25 @@ class GameActivity : AppCompatActivity() {
         val screenWidth = metrics.widthPixels
         val screenHeight = metrics.heightPixels
 
+        @Suppress("DEPRECATION")
+        val cutout = windowManager.defaultDisplay.cutout
+        val cutL = if (!fullscreenMode) cutout?.safeInsetLeft ?: 0 else 0
+        val cutT = if (!fullscreenMode) cutout?.safeInsetTop ?: 0 else 0
+        val cutR = if (!fullscreenMode) cutout?.safeInsetRight ?: 0 else 0
+        val cutB = if (!fullscreenMode) cutout?.safeInsetBottom ?: 0 else 0
+        val effectiveW = (screenWidth - cutL - cutR).coerceAtLeast(1)
+        val effectiveH = (screenHeight - cutT - cutB).coerceAtLeast(1)
+
         val (customEnabled, resParam1, resParam2) = SettingsActivity.getResolution(this)
         if (customEnabled) {
             renderWidth = resParam1
             renderHeight = resParam2
         } else {
             val targetShortEdge = resParam1
-            val shortEdge = minOf(screenWidth, screenHeight)
+            val shortEdge = minOf(effectiveW, effectiveH)
             val scale = if (shortEdge > targetShortEdge) targetShortEdge.toDouble() / shortEdge else 1.0
-            renderWidth = (screenWidth * scale).toInt()
-            renderHeight = (screenHeight * scale).toInt()
+            renderWidth = (effectiveW * scale).toInt()
+            renderHeight = (effectiveH * scale).toInt()
         }
 
         startTimeMs = System.currentTimeMillis()
@@ -97,6 +110,10 @@ class GameActivity : AppCompatActivity() {
         }
         lorieShim = LorieMainActivity(this)
         val frame = FrameLayout(this)
+        frame.setBackgroundColor(0xFF000000.toInt())
+        if (!fullscreenMode) {
+            frame.setPadding(cutL, cutT, cutR, cutB)
+        }
         lorieView = LorieView(this)
         lorieShim!!.setLorieView(lorieView)
         frame.addView(lorieView, FrameLayout.LayoutParams(
@@ -188,23 +205,28 @@ class GameActivity : AppCompatActivity() {
 
         val density = resources.displayMetrics.density
         val kbSize = (64 * density).toInt()
-        val kbButton = TextView(this).apply {
-            text = "IME"
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setTextColor(0xFFFFFFFF.toInt())
+        val imeLayout = SettingsActivity.getOverlayIme(this)
+        val kbPad = (14 * density).toInt()
+        val kbButton = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.keyboard_alt_24)
+            setColorFilter(0xFFFFFFFF.toInt())
             setBackgroundColor(0x99000000.toInt())
+            setPadding(kbPad, kbPad, kbPad, kbPad)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             isClickable = true
             isFocusable = false
-            translationX = -120f * density
+            scaleX = imeLayout.scale
+            scaleY = imeLayout.scale
             setOnClickListener {
                 toggleSoftKeyboard()
             }
         }
-        val kbParams = FrameLayout.LayoutParams(kbSize, kbSize).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        }
+        val kbParams = FrameLayout.LayoutParams(kbSize, kbSize)
         frame.addView(kbButton, kbParams)
+        frame.post {
+            kbButton.x = imeLayout.xFrac * frame.width - kbSize / 2f
+            kbButton.y = imeLayout.yFrac * frame.height - kbSize / 2f
+        }
 
         setContentView(frame)
 

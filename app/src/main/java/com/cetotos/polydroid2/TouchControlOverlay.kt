@@ -24,11 +24,13 @@ class TouchControlOverlay(
 ) : View(context) {
 
     companion object {
-        private const val JOYSTICK_RADIUS_DP = 75f
-        private const val JOYSTICK_KNOB_RADIUS_DP = 33f
+        const val JOYSTICK_RADIUS_DP = 75f
+        const val JOYSTICK_KNOB_RADIUS_DP = 33f
         private const val JOYSTICK_DEAD_ZONE = 0.15f
-        private const val JOYSTICK_MARGIN_DP = 40f
         private const val JOYSTICK_HITBOX_PADDING_DP = 20f
+        const val JUMP_RADIUS_DP = 35f
+        const val ITEMBAR_CELL_DP = 60f
+        const val ITEMBAR_CELLS = 3
 
         private const val TAP_MAX_MS = 250L
         private const val TAP_MAX_PX = 25f
@@ -38,6 +40,7 @@ class TouchControlOverlay(
         private const val SCAN_S = 31
         private const val SCAN_D = 32
         private const val SCAN_SPACE = 57
+        private val ITEMBAR_SCANS = intArrayOf(2, 3, 4)
         private const val INPUT_BUTTON_DOWN = 2
         private const val INPUT_BUTTON_UP = 3
         private const val INPUT_MOTION = 1
@@ -46,8 +49,14 @@ class TouchControlOverlay(
     }
 
     private val density = context.resources.displayMetrics.density
-    private val joystickRadius = JOYSTICK_RADIUS_DP * density
-    private val joystickKnobRadius = JOYSTICK_KNOB_RADIUS_DP * density
+    private val joystickLayout = SettingsActivity.getOverlayJoystick(context)
+    private val jumpLayout = SettingsActivity.getOverlayJump(context)
+    private val itemBarLayout = SettingsActivity.getOverlayItemBar(context)
+    private val joystickRadius = JOYSTICK_RADIUS_DP * density * joystickLayout.scale
+    private val joystickKnobRadius = JOYSTICK_KNOB_RADIUS_DP * density * joystickLayout.scale
+    private val itemBarCell = ITEMBAR_CELL_DP * density * itemBarLayout.scale
+    private val itemBarWidth = itemBarCell * ITEMBAR_CELLS
+    private val itemBarHeight = itemBarCell
 
     private var joystickPointerId = -1
     private var joystickCenterX = 0f
@@ -72,6 +81,30 @@ class TouchControlOverlay(
     private var cameraDeltaY = 0f
 
     private var jumpPointerId = -1
+
+    private var itemBarCenterX = 0f
+    private var itemBarCenterY = 0f
+    private val itemBarRect = RectF()
+    private val itemBarActiveCell = IntArray(ITEMBAR_CELLS) { -1 }
+    private val itemBarTextPaint = Paint().apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        isAntiAlias = true
+        textSize = 22f * density
+    }
+    private val itemBarCellPaint = Paint().apply {
+        color = Color.argb(60, 255, 255, 255)
+        style = Paint.Style.FILL
+    }
+    private val itemBarCellActivePaint = Paint().apply {
+        color = Color.argb(180, 255, 255, 255)
+        style = Paint.Style.FILL
+    }
+    private val itemBarDividerPaint = Paint().apply {
+        color = Color.argb(80, 255, 255, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * density
+    }
 
     private val joystickBasePaint = Paint().apply {
         color = Color.argb(60, 255, 255, 255)
@@ -115,11 +148,10 @@ class TouchControlOverlay(
     private val arcRadius = joystickRadius + 14f * density  // arc center radius
     private val arcRect = RectF()
 
-    private val jumpRadius = 35f * density
+    private val jumpRadius = JUMP_RADIUS_DP * density * jumpLayout.scale
     private var jumpCenterX = 0f
     private var jumpCenterY = 0f
 
-    private val joystickMargin = JOYSTICK_MARGIN_DP * density
     private val joystickHitboxPadding = JOYSTICK_HITBOX_PADDING_DP * density
 
     init {
@@ -129,10 +161,24 @@ class TouchControlOverlay(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        jumpCenterX = w - 80f * density
-        jumpCenterY = h - 80f * density
-        joystickCenterX = joystickMargin + joystickRadius
-        joystickCenterY = h - joystickMargin - joystickRadius
+        joystickCenterX = joystickLayout.xFrac * w
+        joystickCenterY = joystickLayout.yFrac * h
+        jumpCenterX = jumpLayout.xFrac * w
+        jumpCenterY = jumpLayout.yFrac * h
+        itemBarCenterX = itemBarLayout.xFrac * w
+        itemBarCenterY = itemBarLayout.yFrac * h
+        itemBarRect.set(
+            itemBarCenterX - itemBarWidth / 2f,
+            itemBarCenterY - itemBarHeight / 2f,
+            itemBarCenterX + itemBarWidth / 2f,
+            itemBarCenterY + itemBarHeight / 2f,
+        )
+    }
+
+    private fun itemBarCellIndex(x: Float, y: Float): Int {
+        if (!itemBarRect.contains(x, y)) return -1
+        val rel = (x - itemBarRect.left) / itemBarCell
+        return rel.toInt().coerceIn(0, ITEMBAR_CELLS - 1)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -149,6 +195,16 @@ class TouchControlOverlay(
                     jumpPointerId = pid
                     sendKey(SCAN_SPACE, 0, true)
                     invalidate()
+                    return true
+                }
+
+                val cellIdx = itemBarCellIndex(x, y)
+                if (cellIdx >= 0) {
+                    if (itemBarActiveCell[cellIdx] == -1) {
+                        itemBarActiveCell[cellIdx] = pid
+                        sendKey(ITEMBAR_SCANS[cellIdx], 0, true)
+                        invalidate()
+                    }
                     return true
                 }
 
@@ -201,6 +257,14 @@ class TouchControlOverlay(
                     jumpPointerId = -1
                     sendKey(SCAN_SPACE, 0, false)
                     invalidate()
+                } else {
+                    for (c in 0 until ITEMBAR_CELLS) {
+                        if (itemBarActiveCell[c] == pid) {
+                            itemBarActiveCell[c] = -1
+                            sendKey(ITEMBAR_SCANS[c], 0, false)
+                            invalidate()
+                        }
+                    }
                 }
                 return true
             }
@@ -213,6 +277,13 @@ class TouchControlOverlay(
                     sendKey(SCAN_SPACE, 0, false)
                     invalidate()
                 }
+                for (c in 0 until ITEMBAR_CELLS) {
+                    if (itemBarActiveCell[c] != -1) {
+                        itemBarActiveCell[c] = -1
+                        sendKey(ITEMBAR_SCANS[c], 0, false)
+                    }
+                }
+                invalidate()
                 return true
             }
         }
@@ -358,5 +429,24 @@ class TouchControlOverlay(
         jumpArrowPath.moveTo(jumpCenterX, jumpCenterY - arrowSize)
         jumpArrowPath.lineTo(jumpCenterX, jumpCenterY + arrowSize)
         canvas.drawPath(jumpArrowPath, jumpArrowPaint)
+
+        val radius = itemBarCell * 0.25f
+        canvas.drawRoundRect(itemBarRect, radius, radius, itemBarCellPaint)
+        for (c in 0 until ITEMBAR_CELLS) {
+            val left = itemBarRect.left + c * itemBarCell
+            if (itemBarActiveCell[c] != -1) {
+                val cellRect = RectF(left, itemBarRect.top, left + itemBarCell, itemBarRect.bottom)
+                canvas.drawRoundRect(cellRect, radius, radius, itemBarCellActivePaint)
+            }
+            if (c > 0) canvas.drawLine(left, itemBarRect.top, left, itemBarRect.bottom, itemBarDividerPaint)
+            itemBarTextPaint.textSize = itemBarCell * 0.45f
+            canvas.drawText(
+                (c + 1).toString(),
+                left + itemBarCell / 2f,
+                itemBarRect.centerY() + itemBarTextPaint.textSize / 3f,
+                itemBarTextPaint
+            )
+        }
+        canvas.drawRoundRect(itemBarRect, radius, radius, itemBarDividerPaint)
     }
 }
