@@ -271,6 +271,9 @@ class GameActivity : AppCompatActivity() {
                 appendLog("Socket bridge failed to start!")
             }
 
+            AudioBridge.start()
+            appendLog("Audio bridge started")
+
             val entry = CmdEntryPoint()
             cmdEntryPoint = entry
             entry.spawnListeningThread()
@@ -343,6 +346,7 @@ class GameActivity : AppCompatActivity() {
         statsHandler.removeCallbacks(statsRunnable)
         if (isFinishing) {
             Box64Launcher.stop()
+            AudioBridge.stop()
         }
         wakeLock?.let { if (it.isHeld) it.release() }
     }
@@ -368,7 +372,7 @@ class GameActivity : AppCompatActivity() {
     private fun updateStatsOverlay() {
         val unityFps = nativeGetUnityFps()
         val compFps = nativeGetCompositorFps()
-        val unityFrameTime = if (unityFps > 0) "%.1f".format(1000.0 / unityFps) else "---"
+        val medianFps = nativeGetMedianFps()
         val totalFrames = nativeGetTotalFrames()
         val cpuUsage = getCpuUsage()
         val gpuUsage = getGpuUsage()
@@ -383,7 +387,7 @@ class GameActivity : AppCompatActivity() {
         val ramPct = if (mem.second > 0) (mem.first * 100 / mem.second).toInt() else 0
 
         val sb = StringBuilder()
-        sb.appendLine("Unity: $unityFps FPS ($unityFrameTime ms) | Comp: $compFps FPS")
+        sb.appendLine("Unity: $unityFps FPS | Median: $medianFps FPS")
         sb.appendLine("Frames: $totalFrames")
         sb.appendLine("GPU: $gpuName | Usage: ${if (gpuUsage >= 0) "$gpuUsage%" else "N/A"}")
         if (gpuTemp > 0) sb.appendLine("  GPU Temp: ${gpuTemp}\u00B0C")
@@ -510,6 +514,7 @@ class GameActivity : AppCompatActivity() {
     private external fun nativeGetCompositorFps(): Int
     private external fun nativeGetUnityFps(): Int
     private external fun nativeGetTotalFrames(): Int
+    private external fun nativeGetMedianFps(): Int
     private external fun nativeGetVulkanInfo(): String
     private external fun nativeSendInputEvent(type: Int, button: Int, x: Int, y: Int)
     private external fun nativeSendKeyEvent(scanCode: Int, keyCode: Int, keyDown: Boolean)

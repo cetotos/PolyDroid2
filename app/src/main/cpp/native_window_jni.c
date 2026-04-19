@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <jni.h>
 #include <dlfcn.h>
 #include <android/native_window.h>
@@ -25,6 +26,11 @@
 static atomic_int g_comp_fps = 0;
 static atomic_int g_unity_fps = 0;
 static atomic_int g_comp_total_frames = 0;
+
+#define MEDIAN_WINDOW 600
+static uint32_t g_frametimes_us[MEDIAN_WINDOW];
+static atomic_int g_frametime_idx = 0;
+static atomic_int g_frametime_count = 0;
 
 static char g_vulkan_info[256] = "";
 
@@ -114,7 +120,7 @@ static void* bridge_conn_thread(void* arg) {
         return NULL;
     }
 
-    LOGI("bridge: connected client_fd=%d to server", client_fd, g_real_path);
+    LOGI("bridge: connected client_fd=%d to server @%s", client_fd, g_real_path);
 
     struct pollfd pfds[2];
     pfds[0].fd = client_fd;
@@ -238,6 +244,49 @@ static ANativeWindow* g_compositor_win = NULL;
 static AHardwareBuffer* g_comp_ahbs[COMPOSITOR_MAX_BUFFERS];
 static uint32_t g_comp_ahb_count = 0;
 
+#define PIN_MAX_CPUS 64
+
+static int pin_to_big_cores(const char* tag) {
+    int ncpu = (int)sysconf(_SC_NPROCESSORS_CONF);
+    if (ncpu <= 0) return 0;
+    if (ncpu > PIN_MAX_CPUS) ncpu = PIN_MAX_CPUS;
+
+    long freqs[PIN_MAX_CPUS] = {0};
+    long highest = 0, smallest = 0;
+    for (int i = 0; i < ncpu; i++) {
+        char path[128];
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+        FILE* f = fopen(path, "r");
+        if (!f) continue;
+        long v = 0;
+        if (fscanf(f, "%ld", &v) == 1) freqs[i] = v;
+        fclose(f);
+        if (v > highest) highest = v;
+    }
+    if (highest == 0) return 0;
+    smallest = highest;
+    for (int i = 0; i < ncpu; i++)
+        if (freqs[i] > 0 && freqs[i] < smallest) smallest = freqs[i];
+    if (smallest == highest) return 0;
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    int count = 0;
+    for (int i = 0; i < ncpu; i++) {
+        if (freqs[i] > smallest) { CPU_SET(i, &set); count++; }
+    }
+    if (count == 0) return 0;
+
+    if (sched_setaffinity(0, sizeof(set), &set) != 0) {
+        LOGI("%s: sched_setaffinity failed: %s", tag, strerror(errno));
+        return 0;
+    }
+    LOGI("%s: using %d big cores (max: %ld kHz, excluded: %ld kHz)",
+         tag, count, highest, smallest);
+    return count;
+}
+
 static void* compositor_thread(void* arg) {
     (void)arg;
 
@@ -246,6 +295,8 @@ static void* compositor_thread(void* arg) {
     } else {
         LOGI("compositor: setpriority failed: %s (non-fatal)", strerror(errno));
     }
+
+    pin_to_big_cores("compositor");
 
     while (1) {
         LOGI("compositor: waiting for Box64 connection on @polydroid_frame_bridge");
@@ -370,6 +421,7 @@ static void* compositor_thread(void* arg) {
         struct timespec fps_start;
         clock_gettime(CLOCK_MONOTONIC, &fps_start);
         int fps_frame_counter = 0;
+        struct timespec last_frame = fps_start;
 
         ARect src = {0, 0, (int32_t)width, (int32_t)height};
         ARect dst = {0, 0, screen_w, screen_h};
@@ -421,6 +473,16 @@ static void* compositor_thread(void* arg) {
             // calculate FPS
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
+            long dt_ns = (now.tv_sec - last_frame.tv_sec) * 1000000000L +
+                         (now.tv_nsec - last_frame.tv_nsec);
+            last_frame = now;
+            if (dt_ns > 0 && dt_ns < 1000000000L) {
+                int idx = atomic_load(&g_frametime_idx);
+                g_frametimes_us[idx] = (uint32_t)(dt_ns / 1000);
+                atomic_store(&g_frametime_idx, (idx + 1) % MEDIAN_WINDOW);
+                int cnt = atomic_load(&g_frametime_count);
+                if (cnt < MEDIAN_WINDOW) atomic_store(&g_frametime_count, cnt + 1);
+            }
             long elapsed_ns = (now.tv_sec - fps_start.tv_sec) * 1000000000L +
                               (now.tv_nsec - fps_start.tv_nsec);
             if (elapsed_ns >= 1000000000L) {
@@ -643,6 +705,25 @@ Java_com_cetotos_polydroid2_GameActivity_nativeGetTotalFrames(
     JNIEnv* env, jobject thiz)
 {
     return (jint)atomic_load(&g_comp_total_frames);
+}
+
+static int cmp_u32(const void* a, const void* b) {
+    uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+    return (x < y) ? -1 : (x > y);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_cetotos_polydroid2_GameActivity_nativeGetMedianFps(
+    JNIEnv* env, jobject thiz)
+{
+    int cnt = atomic_load(&g_frametime_count);
+    if (cnt < 10) return 0;
+    uint32_t copy[MEDIAN_WINDOW];
+    memcpy(copy, g_frametimes_us, cnt * sizeof(uint32_t));
+    qsort(copy, cnt, sizeof(uint32_t), cmp_u32);
+    uint32_t median_us = copy[cnt / 2];
+    if (median_us == 0) return 0;
+    return (jint)(1000000 / median_us);
 }
 
 JNIEXPORT jstring JNICALL

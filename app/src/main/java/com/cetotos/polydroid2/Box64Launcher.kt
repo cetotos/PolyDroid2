@@ -181,15 +181,27 @@ object Box64Launcher {
         }
         val gameArgStr = if (gameArgs.isNotBlank()) " $gameArgs" else ""
 
+        val bigMask = getBigCoresMask()
+        val sysTaskset = listOf("/system/bin/taskset", "/system/xbin/taskset")
+            .firstOrNull { File(it).canExecute() }
+        val execPrefix = if (sysTaskset != null && bigMask != null) {
+            Log.i(TAG, "Pinning Box64 via $sysTaskset 0x$bigMask")
+            "$sysTaskset $bigMask "
+        } else {
+            Log.i(TAG, "Not pinning Box64 (taskset=$sysTaskset mask=$bigMask)")
+            ""
+        }
+
         val launchScript = File("$rootPath/tmp/launch.sh")
         val envExports = env.entries.joinToString("\n") { (k, v) ->
             "export $k=\"$v\""
         }
+
         launchScript.writeText("""#!/bin/sh
 $envExports
 
 cd "$rootPath/polytoria"
-exec "$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -force-vulkan$gameArgStr
+exec ${execPrefix}"$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -force-vulkan$gameArgStr
 """)
         launchScript.setExecutable(true, false)
 
@@ -239,6 +251,25 @@ exec "$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -for
     fun stop() {
         process?.destroy()
         process = null
+    }
+
+    private fun getBigCoresMask(): String? {
+        return try {
+            val freqs = (0 until 64).mapNotNull { i ->
+                try {
+                    val f = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
+                        .readText().trim().toLong()
+                    if (f > 0) Pair(i, f) else null
+                } catch (_: Exception) { null }
+            }
+            if (freqs.isEmpty()) return null
+            val maxF = freqs.maxOf { it.second }
+            val minF = freqs.minOf { it.second }
+            if (minF == maxF) return null
+            var mask = 0L
+            for ((i, f) in freqs) if (f > minF) mask = mask or (1L shl i)
+            if (mask == 0L) null else mask.toString(16)
+        } catch (_: Exception) { null }
     }
 
     private fun getSystemDnsServers(ctx: Context): List<String> {
