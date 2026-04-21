@@ -504,10 +504,10 @@ static void* compositor_thread(void* arg) {
         LOGI("compositor: client disconnected after %d frames, awaiting reconnect", frame_count);
         close(client_fd);
 
-        txn = ASurfaceTransaction_create();
-        ASurfaceTransaction_setBuffer(txn, g_surface_ctl, NULL, -1);
-        ASurfaceTransaction_apply(txn);
-        ASurfaceTransaction_delete(txn);
+        if (g_surface_ctl) {
+            ASurfaceControl_release(g_surface_ctl);
+            g_surface_ctl = NULL;
+        }
 
         for (uint32_t i = 0; i < g_comp_ahb_count; i++) {
             if (g_comp_ahbs[i]) {

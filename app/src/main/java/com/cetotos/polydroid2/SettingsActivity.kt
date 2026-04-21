@@ -20,6 +20,9 @@ import androidx.core.view.WindowInsetsCompat
 import android.widget.TextView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.divider.MaterialDivider
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
 import com.google.android.material.tabs.TabLayout
@@ -160,19 +163,33 @@ class SettingsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
+        val colorPrimary = MaterialColors.getColor(this, androidx.appcompat.R.attr.colorPrimary, 0)
+        val colorOnSurfaceVariant = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0)
+        val colorSurface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface, 0)
+
         val toolbar = MaterialToolbar(this).apply {
             title = "Settings"
             setNavigationIcon(androidx.appcompat.R.drawable.abc_ic_ab_back_material)
             setNavigationOnClickListener { finish() }
+            setBackgroundColor(colorSurface)
         }
 
         val tabLayout = TabLayout(this).apply {
             tabMode = TabLayout.MODE_FIXED
             tabGravity = TabLayout.GRAVITY_FILL
-            addTab(newTab().setText("Graphics"))
+            setSelectedTabIndicatorColor(colorPrimary)
+            setSelectedTabIndicatorHeight(dp(3))
+            setTabTextColors(colorOnSurfaceVariant, colorPrimary)
+            tabRippleColor = android.content.res.ColorStateList.valueOf(
+                MaterialColors.compositeARGBWithAlpha(colorPrimary, 40)
+            )
+            setBackgroundColor(colorSurface)
+            addTab(newTab().setText("Client"))
             addTab(newTab().setText("Controls"))
             addTab(newTab().setText("Other"))
         }
+
+        val tabDivider = MaterialDivider(this)
 
         val container = FrameLayout(this)
 
@@ -205,6 +222,7 @@ class SettingsActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             addView(toolbar)
             addView(tabLayout)
+            addView(tabDivider)
             addView(
                 container,
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -220,11 +238,41 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun section(title: String): Pair<View, LinearLayout> {
+        val card = MaterialCardView(
+            this, null, com.google.android.material.R.attr.materialCardViewFilledStyle
+        ).apply {
+            radius = dp(20).toFloat()
+            strokeWidth = 0
+            cardElevation = 0f
+        }
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+        }
+        val titleView = TextView(this).apply {
+            text = title
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+        }
+        inner.addView(titleView, layoutParams().apply { bottomMargin = dp(14) })
+        card.addView(inner)
+        return card to inner
+    }
+
+    private fun cardParams(first: Boolean = false): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { if (!first) topMargin = dp(12) }
+    }
+
     private fun buildGraphicsTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(16), dp(24), dp(16))
+            setPadding(dp(16), dp(16), dp(16), dp(24))
         }
+
+        val (displayCard, display) = section("Display")
 
         val dropdown = AutoCompleteTextView(this).apply {
             inputType = InputType.TYPE_NULL
@@ -243,7 +291,7 @@ class SettingsActivity : AppCompatActivity() {
             endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
             addView(dropdown)
         }
-        content.addView(dropdownLayout, layoutParams())
+        display.addView(dropdownLayout, layoutParams())
 
         val currentPreset = prefs.getInt(KEY_RESOLUTION, DEFAULT_RESOLUTION)
         val presetIndex = PRESETS.indexOfFirst { it.first == currentPreset }
@@ -258,13 +306,11 @@ class SettingsActivity : AppCompatActivity() {
 
         val customSwitch = MaterialSwitch(this).apply {
             text = "Custom resolution"
-            setPadding(0, dp(16), 0, 0)
         }
-        content.addView(customSwitch, layoutParams())
+        display.addView(customSwitch, layoutParams().apply { topMargin = dp(16) })
 
         val customContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(8), 0, 0)
         }
 
         val widthEdit = TextInputEditText(this).apply {
@@ -289,9 +335,8 @@ class SettingsActivity : AppCompatActivity() {
         }
         customContainer.addView(heightLayout, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-        content.addView(customContainer, layoutParams())
+        display.addView(customContainer, layoutParams().apply { topMargin = dp(8) })
 
-        // load custom state
         val customEnabled = prefs.getBoolean(KEY_CUSTOM_ENABLED, false)
         customSwitch.isChecked = customEnabled
         dropdownLayout.isEnabled = !customEnabled
@@ -324,23 +369,25 @@ class SettingsActivity : AppCompatActivity() {
 
         val fullscreenSwitch = MaterialSwitch(this).apply {
             text = "Fullscreen mode"
-            setPadding(0, dp(16), 0, 0)
             isChecked = prefs.getBoolean(KEY_FULLSCREEN, true)
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(KEY_FULLSCREEN, checked).apply()
             }
         }
-        content.addView(fullscreenSwitch, layoutParams())
+        display.addView(fullscreenSwitch, layoutParams().apply { topMargin = dp(16) })
+
+        content.addView(displayCard, cardParams(first = true))
+
+        val (graphicsCard, graphics) = section("Graphics")
 
         val statsSwitch = MaterialSwitch(this).apply {
             text = "Performance stats overlay"
-            setPadding(0, dp(16), 0, 0)
             isChecked = prefs.getBoolean(KEY_SHOW_STATS, true)
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(KEY_SHOW_STATS, checked).apply()
             }
         }
-        content.addView(statsSwitch, layoutParams())
+        graphics.addView(statsSwitch, layoutParams())
 
         val driverOptions = listOf(
             VULKAN_DRIVER_AUTO to "Auto",
@@ -362,10 +409,9 @@ class SettingsActivity : AppCompatActivity() {
         ).apply {
             hint = "Vulkan driver"
             endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
-            setPadding(0, dp(16), 0, 0)
             addView(driverDropdown)
         }
-        content.addView(driverLayout, layoutParams())
+        graphics.addView(driverLayout, layoutParams().apply { topMargin = dp(16) })
 
         val currentDriver = prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_SYSTEM) ?: VULKAN_DRIVER_SYSTEM
         val driverIndex = driverOptions.indexOfFirst { it.first == currentDriver }
@@ -376,20 +422,27 @@ class SettingsActivity : AppCompatActivity() {
             prefs.edit().putString(KEY_VULKAN_DRIVER, driverOptions[position].first).apply()
         }
 
-        return ScrollView(this).apply { addView(content) }
+        content.addView(graphicsCard, cardParams())
+
+        return ScrollView(this).apply {
+            isFillViewport = true
+            addView(content)
+        }
     }
 
     private fun buildControlsTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(16), dp(24), dp(16))
+            setPadding(dp(16), dp(16), dp(16), dp(24))
         }
+
+        val (cameraCard, camera) = section("Camera")
 
         val sensitivityLabel = TextView(this).apply {
             text = "Camera sensitivity: ${"%.1f".format(prefs.getFloat(KEY_CAMERA_SENSITIVITY, DEFAULT_SENSITIVITY))}x"
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
         }
-        content.addView(sensitivityLabel, layoutParams())
+        camera.addView(sensitivityLabel, layoutParams())
 
         val sensitivitySlider = Slider(this).apply {
             valueFrom = 0.5f
@@ -401,37 +454,33 @@ class SettingsActivity : AppCompatActivity() {
                 sensitivityLabel.text = "Camera sensitivity: ${"%.1f".format(newVal)}x"
             }
         }
-        content.addView(sensitivitySlider, layoutParams())
+        camera.addView(sensitivitySlider, layoutParams())
 
-        val editorHeader = TextView(this).apply {
-            text = "Overlay editor"
-            setPadding(0, dp(24), 0, dp(4))
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
-        }
-        content.addView(editorHeader, layoutParams())
+        content.addView(cameraCard, cardParams(first = true))
+
+        val (overlayCard, overlay) = section("Overlay editor")
 
         val editorHint = TextView(this).apply {
             text = "Tap a button/joystick, then drag to move or rescale."
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
-            setPadding(0, 0, 0, dp(8))
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
         }
-        content.addView(editorHint, layoutParams())
+        overlay.addView(editorHint, layoutParams().apply { bottomMargin = dp(12) })
 
         val editor = OverlayEditorView(this)
-        content.addView(editor, layoutParams())
+        overlay.addView(editor, layoutParams())
 
         val scaleLabel = TextView(this).apply {
-            setPadding(0, dp(16), 0, 0)
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
         }
-        content.addView(scaleLabel, layoutParams())
+        overlay.addView(scaleLabel, layoutParams().apply { topMargin = dp(16) })
 
         val scaleSlider = Slider(this).apply {
             valueFrom = 0.5f
             valueTo = 2f
             stepSize = 0.05f
         }
-        content.addView(scaleSlider, layoutParams())
+        overlay.addView(scaleSlider, layoutParams())
 
         fun renderScaleLabel(which: OverlayEditorView.Which, scale: Float) {
             val name = when (which) {
@@ -468,18 +517,32 @@ class SettingsActivity : AppCompatActivity() {
                 renderScaleLabel(editor.selected, editor.selectedScale())
             }
         }
-        content.addView(resetButton, LinearLayout.LayoutParams(
+        overlay.addView(resetButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(16) })
 
-        return ScrollView(this).apply { addView(content) }
+        content.addView(overlayCard, cardParams())
+
+        return ScrollView(this).apply {
+            isFillViewport = true
+            addView(content)
+        }
     }
 
     private fun buildOtherTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(16), dp(24), dp(16))
+            setPadding(dp(16), dp(16), dp(16), dp(24))
         }
+
+        val (diagCard, diag) = section("Diagnostics")
+
+        val diagHint = TextView(this).apply {
+            text = "Send your recent app and Unity logs to the developer to help fix bugs. No personal info is included."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
+        }
+        diag.addView(diagHint, layoutParams().apply { bottomMargin = dp(12) })
 
         val sendLogsButton = MaterialButton(this).apply {
             text = "Send app logs"
@@ -492,12 +555,17 @@ class SettingsActivity : AppCompatActivity() {
                     .show()
             }
         }
-        content.addView(sendLogsButton, LinearLayout.LayoutParams(
+        diag.addView(sendLogsButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        return ScrollView(this).apply { addView(content) }
+        content.addView(diagCard, cardParams(first = true))
+
+        return ScrollView(this).apply {
+            isFillViewport = true
+            addView(content)
+        }
     }
 
     private fun sendLogs(button: MaterialButton) {
