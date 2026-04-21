@@ -1,15 +1,50 @@
 /*
  * libpulse-simple.so.0 stub used for FMOD API
  * FMOD (and Unity along with it) will crash without this
- * will be rewritten later (or replaced) for actual audio support
+ * now rewritten with actual audio
  */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define STUB_LOG(fmt, ...) fprintf(stderr, "[pulse-stub] " fmt "\n", ##__VA_ARGS__)
+
+#define POLYDROID_AUDIO_SOCK "polydroid_audio"
+#define POLYDROID_AUDIO_MAGIC 0x31414450u
+
+static int connect_audio_bridge(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    addr.sun_path[0] = '\0';
+    size_t nlen = strlen(POLYDROID_AUDIO_SOCK);
+    memcpy(addr.sun_path + 1, POLYDROID_AUDIO_SOCK, nlen);
+    socklen_t alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + nlen);
+    if (connect(fd, (struct sockaddr *)&addr, alen) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int write_all(int fd, const void *buf, size_t n) {
+    const char *p = (const char *)buf;
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, p + off, n - off);
+        if (w <= 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
 
 typedef enum pa_sample_format {
     PA_SAMPLE_U8,
@@ -57,7 +92,10 @@ typedef enum pa_stream_direction {
 
 typedef struct pa_simple {
     pa_sample_spec spec;
-    int dummy;
+    pa_stream_direction_t dir;
+    int fd;
+    unsigned long long bytes_written;
+    unsigned long long tlength_us;
 } pa_simple;
 
 typedef unsigned long long pa_usec_t;
@@ -73,9 +111,17 @@ pa_simple *pa_simple_new(
     const pa_buffer_attr *attr,
     int *error)
 {
-    STUB_LOG("pa_simple_new(name=%s, dir=%d, rate=%u, ch=%u, fmt=%d)",
+    STUB_LOG("pa_simple_new(name=%s, dir=%d, rate=%u, ch=%u, fmt=%d attr=%s"
+             "%s%u%s%u%s%u%s%u%s%u%s)",
         name ? name : "NULL", dir,
-        ss ? ss->rate : 0, ss ? ss->channels : 0, ss ? ss->format : -1);
+        ss ? ss->rate : 0, ss ? ss->channels : 0, ss ? ss->format : -1,
+        attr ? "{" : "NULL",
+        attr ? "maxlength=" : "", attr ? attr->maxlength : 0,
+        attr ? " tlength="  : "", attr ? attr->tlength  : 0,
+        attr ? " prebuf="   : "", attr ? attr->prebuf   : 0,
+        attr ? " minreq="   : "", attr ? attr->minreq   : 0,
+        attr ? " fragsize=" : "", attr ? attr->fragsize : 0,
+        attr ? "}" : "");
 
     pa_simple *s = calloc(1, sizeof(pa_simple));
     if (!s) {
@@ -83,14 +129,72 @@ pa_simple *pa_simple_new(
         return NULL;
     }
     if (ss) s->spec = *ss;
+    s->dir = dir;
+    s->fd = -1;
+    s->bytes_written = 0;
+
+    unsigned bps = 2;
+    if (ss) {
+        switch (ss->format) {
+            case PA_SAMPLE_U8: bps = 1; break;
+            case PA_SAMPLE_S16LE: case PA_SAMPLE_S16BE: bps = 2; break;
+            case PA_SAMPLE_FLOAT32LE: case PA_SAMPLE_FLOAT32BE:
+            case PA_SAMPLE_S32LE: case PA_SAMPLE_S32BE: bps = 4; break;
+            default: bps = 2; break;
+        }
+    }
+    unsigned frame_bytes = bps * (ss ? ss->channels : 2);
+    unsigned rate_hz = ss ? ss->rate : 48000;
+    unsigned long long bytes_per_sec = (unsigned long long)frame_bytes * rate_hz;
+    unsigned long long tlen_bytes = attr && attr->tlength != (unsigned)-1
+        ? attr->tlength : (bytes_per_sec / 10);
+    s->tlength_us = bytes_per_sec ? (tlen_bytes * 1000000ULL) / bytes_per_sec : 100000ULL;
+
+    if (dir == PA_STREAM_PLAYBACK && ss) {
+        s->fd = connect_audio_bridge();
+        if (s->fd >= 0) {
+            uint8_t hdr[12];
+            uint32_t magic = POLYDROID_AUDIO_MAGIC;
+            uint32_t rate = ss->rate;
+            memcpy(hdr + 0, &magic, 4);
+            memcpy(hdr + 4, &rate, 4);
+            hdr[8]  = (uint8_t)ss->channels;
+            hdr[9]  = (uint8_t)ss->format;
+            hdr[10] = 0;
+            hdr[11] = 0;
+            if (write_all(s->fd, hdr, sizeof(hdr)) != 0) {
+                STUB_LOG("header send failed, audio disabled!");
+                close(s->fd);
+                s->fd = -1;
+            } else {
+                STUB_LOG("audio bridge connected rate=%u ch=%u fmt=%d",
+                         ss->rate, ss->channels, ss->format);
+            }
+        } else {
+            STUB_LOG("audio bridge connect failed; audio disabled");
+        }
+    }
+
     if (error) *error = 0;
     return s;
 }
 
 // write audio data
 int pa_simple_write(pa_simple *s, const void *data, size_t bytes, int *error) {
-    STUB_LOG("pa_simple_write(%p, %zu bytes)", (void*)s, bytes);
-    (void)data;
+    static int log_count = 0;
+    if (log_count < 3) {
+        STUB_LOG("pa_simple_write(%p, %zu bytes, fd=%d)",
+                 (void*)s, bytes, s ? s->fd : -2);
+        log_count++;
+    }
+    if (s && s->fd >= 0 && data && bytes > 0) {
+        if (write_all(s->fd, data, bytes) != 0) {
+            close(s->fd);
+            s->fd = -1;
+        } else {
+            s->bytes_written += bytes;
+        }
+    }
     if (error) *error = 0;
     return 0;
 }
@@ -119,13 +223,17 @@ int pa_simple_flush(pa_simple *s, int *error) {
 
 void pa_simple_free(pa_simple *s) {
     STUB_LOG("pa_simple_free(%p)", (void*)s);
-    free(s);
+    if (s) {
+        if (s->fd >= 0) close(s->fd);
+        free(s);
+    }
 }
 
 pa_usec_t pa_simple_get_latency(pa_simple *s, int *error) {
-    STUB_LOG("pa_simple_get_latency(%p)", (void*)s);
     if (error) *error = 0;
-    return 20000; /* 20ms */
+    if (!s) return 0;
+    pa_usec_t ret = s->tlength_us ? s->tlength_us : 20000;
+    return ret;
 }
 
 
@@ -406,7 +514,18 @@ pa_operation *pa_context_get_server_info(pa_context *c, pa_server_info_cb_t cb, 
 }
 
 
-typedef struct pa_stream { int dummy; } pa_stream;
+typedef void (*pa_stream_notify_cb_t)(void *s, void *userdata);
+typedef void (*pa_stream_request_cb_t)(void *s, size_t nbytes, void *userdata);
+
+typedef struct pa_stream {
+    pa_sample_spec spec;
+    int fd;
+    pa_stream_notify_cb_t state_cb;
+    void *state_cb_ud;
+    pa_stream_request_cb_t write_cb;
+    void *write_cb_ud;
+    char write_buf[65536];
+} pa_stream;
 typedef enum pa_stream_state {
     PA_STREAM_UNCONNECTED = 0,
     PA_STREAM_CREATING,
@@ -416,32 +535,77 @@ typedef enum pa_stream_state {
 } pa_stream_state_t;
 
 pa_stream *pa_stream_new(pa_context *c, const char *name, const pa_sample_spec *ss, const pa_channel_map *map) {
-    STUB_LOG("pa_stream_new(name=%s)", name ? name : "NULL");
-    (void)c; (void)ss; (void)map;
-    return calloc(1, sizeof(pa_stream));
+    STUB_LOG("pa_stream_new(name=%s rate=%u ch=%u fmt=%d)",
+             name ? name : "NULL",
+             ss ? ss->rate : 0, ss ? ss->channels : 0, ss ? ss->format : -1);
+    (void)c; (void)map;
+    pa_stream *s = calloc(1, sizeof(pa_stream));
+    if (!s) return NULL;
+    if (ss) s->spec = *ss;
+    s->fd = -1;
+    return s;
 }
 pa_stream *pa_stream_new_with_proplist(pa_context *c, const char *name, const pa_sample_spec *ss, const pa_channel_map *map, void *p) {
     (void)p;
     return pa_stream_new(c, name, ss, map);
 }
-void pa_stream_unref(pa_stream *s) { free(s); }
+void pa_stream_unref(pa_stream *s) {
+    if (s) {
+        if (s->fd >= 0) close(s->fd);
+        free(s);
+    }
+}
 pa_stream *pa_stream_ref(pa_stream *s) { return s; }
 pa_stream_state_t pa_stream_get_state(pa_stream *s) { (void)s; return PA_STREAM_READY; }
 int pa_stream_connect_playback(pa_stream *s, const char *dev, const pa_buffer_attr *attr, int flags, void *volume, void *sync) {
-    STUB_LOG("pa_stream_connect_playback");
-    (void)s; (void)dev; (void)attr; (void)flags; (void)volume; (void)sync;
+    STUB_LOG("pa_stream_connect_playback rate=%u ch=%u fmt=%d",
+             s ? s->spec.rate : 0, s ? s->spec.channels : 0, s ? s->spec.format : -1);
+    (void)dev; (void)attr; (void)flags; (void)volume; (void)sync;
+    if (!s) return -1;
+    s->fd = connect_audio_bridge();
+    if (s->fd >= 0 && s->spec.rate > 0) {
+        uint8_t hdr[12];
+        uint32_t magic = POLYDROID_AUDIO_MAGIC;
+        uint32_t rate = s->spec.rate;
+        memcpy(hdr + 0, &magic, 4);
+        memcpy(hdr + 4, &rate, 4);
+        hdr[8]  = (uint8_t)s->spec.channels;
+        hdr[9]  = (uint8_t)s->spec.format;
+        hdr[10] = 0;
+        hdr[11] = 0;
+        if (write_all(s->fd, hdr, sizeof(hdr)) != 0) {
+            STUB_LOG("stream: header send failed");
+            close(s->fd);
+            s->fd = -1;
+        }
+    }
+    if (s->state_cb) s->state_cb(s, s->state_cb_ud);
+    if (s->write_cb) s->write_cb(s, sizeof(s->write_buf), s->write_cb_ud);
     return 0;
 }
 int pa_stream_connect_record(pa_stream *s, const char *dev, const pa_buffer_attr *attr, int flags) {
     (void)s; (void)dev; (void)attr; (void)flags;
     return 0;
 }
-int pa_stream_disconnect(pa_stream *s) { (void)s; return 0; }
-int pa_stream_write(pa_stream *s, const void *data, size_t nbytes, void (*free_cb)(void*), long long offset, int seek) {
-    (void)s; (void)data; (void)nbytes; (void)free_cb; (void)offset; (void)seek;
+int pa_stream_disconnect(pa_stream *s) {
+    if (s && s->fd >= 0) { close(s->fd); s->fd = -1; }
     return 0;
 }
-size_t pa_stream_writable_size(pa_stream *s) { (void)s; return 4096; }
+int pa_stream_write(pa_stream *s, const void *data, size_t nbytes, void (*free_cb)(void*), long long offset, int seek) {
+    (void)offset; (void)seek;
+    if (s && s->fd >= 0 && data && nbytes > 0) {
+        if (write_all(s->fd, data, nbytes) != 0) {
+            close(s->fd);
+            s->fd = -1;
+        }
+    }
+    if (free_cb && data) free_cb((void *)data);
+    if (s && s->write_cb) s->write_cb(s, sizeof(s->write_buf), s->write_cb_ud);
+    return 0;
+}
+size_t pa_stream_writable_size(pa_stream *s) {
+    return s ? sizeof(s->write_buf) : 0;
+}
 size_t pa_stream_readable_size(pa_stream *s) { (void)s; return 0; }
 int pa_stream_peek(pa_stream *s, const void **data, size_t *nbytes) {
     (void)s;
@@ -465,8 +629,12 @@ pa_operation *pa_stream_cork(pa_stream *s, int b, pa_context_success_cb_t cb, vo
     if (cb) cb(s, 1, userdata);
     return &g_done_op;
 }
-void pa_stream_set_state_callback(pa_stream *s, void *cb, void *userdata) { (void)s; (void)cb; (void)userdata; }
-void pa_stream_set_write_callback(pa_stream *s, void *cb, void *userdata) { (void)s; (void)cb; (void)userdata; }
+void pa_stream_set_state_callback(pa_stream *s, void *cb, void *userdata) {
+    if (s) { s->state_cb = (pa_stream_notify_cb_t)cb; s->state_cb_ud = userdata; }
+}
+void pa_stream_set_write_callback(pa_stream *s, void *cb, void *userdata) {
+    if (s) { s->write_cb = (pa_stream_request_cb_t)cb; s->write_cb_ud = userdata; }
+}
 void pa_stream_set_read_callback(pa_stream *s, void *cb, void *userdata) { (void)s; (void)cb; (void)userdata; }
 void pa_stream_set_overflow_callback(pa_stream *s, void *cb, void *userdata) { (void)s; (void)cb; (void)userdata; }
 void pa_stream_set_underflow_callback(pa_stream *s, void *cb, void *userdata) { (void)s; (void)cb; (void)userdata; }
@@ -482,10 +650,10 @@ int pa_stream_get_latency(pa_stream *s, pa_usec_t *r_usec, int *negative) {
     return 0;
 }
 int pa_stream_begin_write(pa_stream *s, void **data, size_t *nbytes) {
-    (void)s;
-    static char discard_buf[8192];
-    if (data) *data = discard_buf;
-    if (nbytes && *nbytes > sizeof(discard_buf)) *nbytes = sizeof(discard_buf);
+    if (!s) return -1;
+    if (data) *data = s->write_buf;
+    if (nbytes && (*nbytes == 0 || *nbytes > sizeof(s->write_buf)))
+        *nbytes = sizeof(s->write_buf);
     return 0;
 }
 int pa_stream_cancel_write(pa_stream *s) { (void)s; return 0; }

@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 object RootFs {
     private const val TAG = "PolyDroid2"
     private const val VERSION = 6
-    private const val LIBS_VERSION = 3
+    private const val LIBS_VERSION = 4
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",
@@ -33,6 +33,8 @@ object RootFs {
         "glibc-x86_64/libxkbcommon.so.0",
         "glibc-x86_64/libpulse.so.0",
         "glibc-x86_64/libpulse-simple.so.0",
+        "glibc-x86_64/libdbus-1.so.3",
+        "glibc-x86_64/libaudio_trace.so",
         "glibc-x86_64/libtimer_shim.so",
         "libudev_stub.so",
         "libssl.so.1.0.0",
@@ -254,6 +256,33 @@ object RootFs {
         Log.i(TAG, "Extracted successfuly")
     }
 
+    // remove the sound effects audio because they sound corrupted
+    // this means no explosion, jump or footstep sounds
+    // but they sound very glitchy anyways
+    fun silenceBuiltInSfx(polyDir: File) {
+        val res = File(polyDir, "Polytoria Client_Data/resources.resource")
+        if (!res.exists()) return
+        val marker = File(polyDir, ".pd_sfx_silenced")
+        if (marker.exists() && marker.readText().trim() == res.length().toString()) return
+        try {
+            val len = res.length()
+            java.io.RandomAccessFile(res, "rw").use { raf ->
+                val zeros = ByteArray(65536)
+                var remaining = len
+                raf.seek(0)
+                while (remaining > 0) {
+                    val n = minOf(remaining, zeros.size.toLong()).toInt()
+                    raf.write(zeros, 0, n)
+                    remaining -= n
+                }
+            }
+            marker.writeText(len.toString())
+            Log.i(TAG, "audio delete success ($len bytes)")
+        } catch (e: Exception) {
+            Log.w(TAG, "audio delete failed: ${e.message}")
+        }
+    }
+
     private fun copyAssetCounted(ctx: Context, asset: String, dest: File, progress: Progress) {
         ctx.assets.open(asset).use { raw ->
             CountingInputStream(raw) { progress.addBytes(it) }.use { counted ->
@@ -332,6 +361,8 @@ object RootFs {
             "libnss_files.so.2", "libnss_dns.so.2",
             "libxkbcommon.so.0",
             "libpulse.so.0", "libpulse-simple.so.0",
+            "libdbus-1.so.3",
+            "libaudio_trace.so",
             "libtimer_shim.so"
         )
         for (lib in glibcLibs) {

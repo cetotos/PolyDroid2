@@ -11,6 +11,7 @@ tasks.named("preBuild") {
             "src/main/assets/glibc-x86_64/libX11.so.6",
             "src/main/assets/glibc-x86_64/libpulse.so.0",
             "src/main/assets/glibc-x86_64/libpulse-simple.so.0",
+            "src/main/assets/glibc-x86_64/libdbus-1.so.3",
         )
         for (path in required) {
             if (!file(path).exists()) error("Missing pre-built: $path")

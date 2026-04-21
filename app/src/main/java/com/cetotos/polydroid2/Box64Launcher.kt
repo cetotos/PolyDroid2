@@ -21,6 +21,7 @@ object Box64Launcher {
         File(root, "polytoria/libdecor-0.so.0").delete()
         File(root, "polytoria/libdecor-cairo.so").delete()
         File(root, "polytoria/unity.lock").delete()
+        RootFs.silenceBuiltInSfx(File(root, "polytoria"))
         File("$rootPath/tmp").mkdirs()
         File("$rootPath/tmp/.X11-unix").apply { mkdirs(); setReadable(true, false); setExecutable(true, false); setWritable(true, false) }
 
@@ -116,10 +117,11 @@ object Box64Launcher {
                 "libXfixes.so.3:libXrender.so.1:" +
                 "libasound.so.2:" +
                 "libpulse.so.0:libpulse-simple.so.0:" +
+                "libdbus-1.so.3:" +
                 "librt.so.1")
 
             var ldPreload = ""
-            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$ldPreload"
+            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$rootPath/usr/lib/x86_64-linux-gnu/libaudio_trace.so:$ldPreload"
             put("BOX64_LD_PRELOAD", ldPreload.trimEnd(':'))
             put("BOX64_LOG", "1") // level 2 will give WAY too much do not use it the Player.log ends up being GIGABYTES big
             put("BOX64_SHOWSEGV", "1")
