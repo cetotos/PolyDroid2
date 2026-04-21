@@ -505,6 +505,11 @@ static void* compositor_thread(void* arg) {
         close(client_fd);
 
         if (g_surface_ctl) {
+            txn = ASurfaceTransaction_create();
+            ASurfaceTransaction_setVisibility(txn, g_surface_ctl, 0);
+            ASurfaceTransaction_setBuffer(txn, g_surface_ctl, NULL, -1);
+            ASurfaceTransaction_apply(txn);
+            ASurfaceTransaction_delete(txn);
             ASurfaceControl_release(g_surface_ctl);
             g_surface_ctl = NULL;
         }
