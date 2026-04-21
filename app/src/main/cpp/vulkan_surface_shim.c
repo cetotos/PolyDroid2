@@ -1596,6 +1596,36 @@ static VkResult shim_vkQueuePresentKHR(
     static uint32_t unity_fps = 0;
     static struct timespec fps_start = {0, 0};
 
+    static long max_fps_interval_ns = -1;
+    static struct timespec last_present = {0, 0};
+    if (max_fps_interval_ns < 0) {
+        const char* e = getenv("POLYDROID_MAX_FPS");
+        int fps = (e && *e) ? atoi(e) : 0;
+        max_fps_interval_ns = (fps > 0) ? (1000000000L / fps) : 0;
+        if (max_fps_interval_ns > 0) LOGI("FPS cap: %d (%ld ns/frame)", fps, max_fps_interval_ns);
+    }
+    if (max_fps_interval_ns > 0) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (last_present.tv_sec != 0 || last_present.tv_nsec != 0) {
+            long target_s = last_present.tv_sec + (last_present.tv_nsec + max_fps_interval_ns) / 1000000000L;
+            long target_ns = (last_present.tv_nsec + max_fps_interval_ns) % 1000000000L;
+            long wait_ns = (target_s - now.tv_sec) * 1000000000L + (target_ns - now.tv_nsec);
+            if (wait_ns > 0 && wait_ns < 500000000L) {
+                struct timespec req = { .tv_sec = 0, .tv_nsec = wait_ns };
+                nanosleep(&req, NULL);
+            }
+            if (wait_ns > 0) {
+                last_present.tv_sec = target_s;
+                last_present.tv_nsec = target_ns;
+            } else {
+                last_present = now;
+            }
+        } else {
+            last_present = now;
+        }
+    }
+
     if (!g_queue) {
         g_queue = queue;
         LOGI("Captured VkQueue: %p", (void*)queue);

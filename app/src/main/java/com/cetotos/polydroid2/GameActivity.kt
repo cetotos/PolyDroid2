@@ -16,9 +16,14 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.termux.x11.CmdEntryPoint
 import com.termux.x11.LorieView
 import com.termux.x11.MainActivity as LorieMainActivity
@@ -41,6 +46,7 @@ class GameActivity : AppCompatActivity() {
     private var box64Started = false
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var vulkanSurfaceReady = false
+    @Volatile private var crashDialogShown = false
 
     private val statsHandler = Handler(Looper.getMainLooper())
     private var statsUpdateCount = 0
@@ -307,9 +313,15 @@ class GameActivity : AppCompatActivity() {
 
             appendLog("Launching Box64...")
             try {
-                Box64Launcher.launch(this, tmpDir, fullArgs, renderWidth, renderHeight) { line ->
-                    appendLog(line)
-                }
+                Box64Launcher.launch(
+                    this, tmpDir, fullArgs, renderWidth, renderHeight,
+                    onLog = { line -> appendLog(line) },
+                    onExit = { code ->
+                        if (code != 0 && !isFinishing) {
+                            runOnUiThread { showCrashDialog(code) }
+                        }
+                    }
+                )
             } catch (e: Exception) {
                 appendLog("Error! ${e.message}")
                 e.printStackTrace()
@@ -353,6 +365,87 @@ class GameActivity : AppCompatActivity() {
 
     private fun toggleSoftKeyboard() {
         imeCapture.switchKeyboardState()
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun showCrashDialog(exitCode: Int) {
+        if (crashDialogShown) return
+        crashDialogShown = true
+
+        val pad = dp(24)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(8), pad, 0)
+        }
+
+        val msg = TextView(this).apply {
+            text = "Box64 exited with code $exitCode."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+        }
+        content.addView(msg, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(16) })
+
+        val sendBtn = MaterialButton(this).apply {
+            text = "Send logs"
+        }
+        content.addView(sendBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        val websiteBtn = MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonTonalStyle
+        ).apply {
+            text = "Back to website"
+        }
+        content.addView(websiteBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Polytoria has crashed!")
+            .setView(content)
+            .setCancelable(false)
+            .create()
+
+        sendBtn.setOnClickListener {
+            sendBtn.isEnabled = false
+            sendBtn.text = "Sending..."
+            SettingsActivity.sendLogsStatic(
+                this,
+                extraInfo = "CRASH exit=$exitCode",
+                onProgress = { s -> runOnUiThread { sendBtn.text = s } },
+                onDone = { _, m ->
+                    runOnUiThread {
+                        Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
+                        sendBtn.isEnabled = true
+                        sendBtn.text = "Send logs"
+                    }
+                }
+            )
+        }
+
+        websiteBtn.setOnClickListener {
+            try {
+                CustomTabsIntent.Builder()
+                    .setShowTitle(false)
+                    .setUrlBarHidingEnabled(true)
+                    .build()
+                    .launchUrl(this, android.net.Uri.parse("https://polytoria.com/home"))
+            } catch (e: Exception) {
+                try {
+                    startActivity(android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://polytoria.com/home")
+                    ))
+                } catch (_: Exception) {}
+            }
+            dialog.dismiss()
+            finish()
+        }
+
+        dialog.show()
     }
 
     private fun appendLog(msg: String) {

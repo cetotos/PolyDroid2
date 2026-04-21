@@ -47,6 +47,8 @@ class SettingsActivity : AppCompatActivity() {
         const val VULKAN_DRIVER_AUTO = "auto"
         const val VULKAN_DRIVER_SYSTEM = "system"
         const val VULKAN_DRIVER_TURNIP = "turnip"
+        const val KEY_MAX_FPS = "max_fps"
+        const val KEY_MAX_MEMORY_MB = "max_memory_mb"
         const val KEY_LAST_LOG_SEND = "last_log_send_time"
         const val LOG_SEND_COOLDOWN = 180 * 1000L
         const val DEFAULT_RESOLUTION = 720
@@ -74,8 +76,17 @@ class SettingsActivity : AppCompatActivity() {
         const val DEFAULT_ITEMBAR_X = 0.5f
         const val DEFAULT_ITEMBAR_Y = 0.08f
 
-        // whoever is reading this, please, dont spam the webhook. Thanks
-        private const val WEBHOOK_URL = "https://discord.com/api/webhooks/1492893841915904120/1eGfbBbhAK76Q7yzJs8ilxxjE00nDVY8-cBNY4yPJxROOoMqaMySXQUI9VavagVfwpx5"
+        // if you decoded this, please dont spam it. Thanks
+        private const val REPORT_KEY = "very-secure-key-ok-dont-spam-it-bots-thanks"
+        private const val REPORT_BLOB = "HhEGCV5JSkwRGxZOBBcdAwwEQEsOHh0CBBUDBUIGH15NXkBKG0ZeWFhfQEBXS04fQFNaTF1IHxIdH3cJKU5QWysmeBwRUV5rKzNnCCVAPWkAAysUDh4lVEUuQBpSMAIlBhhZHxZyLV5+CFovA1lHHgwCXwc3YDsaPw=="
+
+        private fun reportEndpoint(): String {
+            val raw = android.util.Base64.decode(REPORT_BLOB, android.util.Base64.DEFAULT)
+            val k = REPORT_KEY.toByteArray()
+            val out = ByteArray(raw.size)
+            for (i in raw.indices) out[i] = (raw[i].toInt() xor k[i % k.size].toInt()).toByte()
+            return String(out, Charsets.UTF_8)
+        }
 
         private val PRESETS = listOf(
             480 to "480p", // 480p is basically the minimum until thing start breaking
@@ -105,6 +116,136 @@ class SettingsActivity : AppCompatActivity() {
         fun getVulkanDriver(ctx: Context): String {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             return prefs.getString(KEY_VULKAN_DRIVER, VULKAN_DRIVER_SYSTEM) ?: VULKAN_DRIVER_SYSTEM
+        }
+
+        fun getMaxFps(ctx: Context): Int {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs.getInt(KEY_MAX_FPS, 0)
+        }
+
+        fun getMaxMemoryMB(ctx: Context): Int {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs.getInt(KEY_MAX_MEMORY_MB, 0)
+        }
+
+        fun sendLogsStatic(
+            ctx: Context,
+            extraInfo: String = "",
+            onProgress: (String) -> Unit,
+            onDone: (success: Boolean, msg: String) -> Unit,
+        ) {
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val lastSend = prefs.getLong(KEY_LAST_LOG_SEND, 0)
+            val now = System.currentTimeMillis()
+            if (now - lastSend < LOG_SEND_COOLDOWN) {
+                val remaining = ((LOG_SEND_COOLDOWN - (now - lastSend)) / 1000).toInt()
+                onDone(false, "Please wait ${remaining}s before sending again")
+                return
+            }
+
+            Thread {
+                try {
+                    onProgress("Reading logs...")
+                    val playerSb = StringBuilder()
+                    playerSb.appendLine("------ Device info -----")
+                    playerSb.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+                    playerSb.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                    playerSb.appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
+                    playerSb.appendLine("Board: ${Build.BOARD}")
+                    playerSb.appendLine("Hardware: ${Build.HARDWARE}")
+                    playerSb.appendLine("Vulkan driver: ${getVulkanDriver(ctx)}")
+                    playerSb.appendLine("Resolution: ${getResolution(ctx)}")
+                    if (extraInfo.isNotEmpty()) {
+                        playerSb.appendLine()
+                        playerSb.appendLine(extraInfo)
+                    }
+                    playerSb.appendLine()
+
+                    val playerLog = File(
+                        ctx.filesDir,
+                        "rootfs/home/user/.config/unity3d/Polytoria/Polytoria Client/Player.log"
+                    )
+                    if (playerLog.exists()) {
+                        val lines = playerLog.readLines()
+                        val start = (lines.size - 5000).coerceAtLeast(0)
+                        for (i in start until lines.size) {
+                            val line = lines[i]
+                            if (line.contains("sigaction handler for sig ")) continue
+                            if (line.contains("Signal ") && line.contains("si_addr=")) continue
+                            if (line.contains("Warning, calling Signal ") && line.contains("SIG_IGN")) continue
+                            playerSb.appendLine(line)
+                        }
+                    } else {
+                        playerSb.appendLine("Player.log not found")
+                    }
+                    val playerBytes = playerSb.toString().toByteArray(Charsets.UTF_8)
+
+                    val logcatSb = StringBuilder()
+                    try {
+                        val proc = Runtime.getRuntime().exec(arrayOf(
+                            "logcat", "-d", "-v", "time",
+                            "PolyDroid2:*", "PolyDroid2-Vulkan:*", "PolyDroid2-window:*",
+                            "Box64:*", "BOX64:*",
+                            "*:S"
+                        ))
+                        val allLines = proc.inputStream.bufferedReader().readLines()
+                        proc.waitFor()
+                        val start = (allLines.size - 1000).coerceAtLeast(0)
+                        for (i in start until allLines.size) logcatSb.appendLine(allLines[i])
+                        if (allLines.isEmpty()) logcatSb.appendLine("No matching logcat entries found")
+                    } catch (e: Exception) {
+                        logcatSb.appendLine("Failed to read logcat: ${e.message}")
+                    }
+                    val logcatBytes = logcatSb.toString().toByteArray(Charsets.UTF_8)
+
+                    onProgress("Sending...")
+
+                    val boundary = "----PolyDroid${System.currentTimeMillis()}"
+                    val message = "${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} | ${Build.HARDWARE}" +
+                        if (extraInfo.isNotEmpty()) " | $extraInfo" else ""
+
+                    val body = java.io.ByteArrayOutputStream()
+                    fun writePart(s: String) { body.write(s.toByteArray(Charsets.UTF_8)) }
+                    writePart("--$boundary\r\n")
+                    writePart("Content-Disposition: form-data; name=\"content\"\r\n\r\n")
+                    writePart("$message\r\n")
+                    writePart("--$boundary\r\n")
+                    writePart("Content-Disposition: form-data; name=\"files[0]\"; filename=\"player.log\"\r\n")
+                    writePart("Content-Type: text/plain\r\n\r\n")
+                    body.write(playerBytes)
+                    writePart("\r\n")
+                    writePart("--$boundary\r\n")
+                    writePart("Content-Disposition: form-data; name=\"files[1]\"; filename=\"logcat.log\"\r\n")
+                    writePart("Content-Type: text/plain\r\n\r\n")
+                    body.write(logcatBytes)
+                    writePart("\r\n")
+                    writePart("--$boundary--\r\n")
+                    val bodyBytes = body.toByteArray()
+
+                    val url = URL(reportEndpoint())
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.doOutput = true
+                    conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                    conn.setRequestProperty("Content-Length", bodyBytes.size.toString())
+                    conn.setFixedLengthStreamingMode(bodyBytes.size)
+                    conn.connectTimeout = 20000
+                    conn.readTimeout = 20000
+                    conn.outputStream.use { it.write(bodyBytes) }
+                    val responseCode = conn.responseCode
+                    conn.disconnect()
+
+                    if (responseCode in 200..299) {
+                        prefs.edit().putLong(KEY_LAST_LOG_SEND, System.currentTimeMillis()).apply()
+                        onDone(true, "Logs sent!")
+                    } else {
+                        onDone(false, "Failed to send! HTTP $responseCode")
+                    }
+                } catch (e: Exception) {
+                    Log.e("PolyDroid2", "failed to send logs: ${e.message}", e)
+                    onDone(false, "Failed with: ${e.message}")
+                }
+            }.start()
         }
 
         fun getResolution(ctx: Context): Triple<Boolean, Int, Int> {
@@ -424,6 +565,95 @@ class SettingsActivity : AppCompatActivity() {
 
         content.addView(graphicsCard, cardParams())
 
+        val (perfCard, perf) = section("Performance")
+
+        val fpsOptions = listOf(
+            0 to "Unlimited",
+            30 to "30 FPS",
+            45 to "45 FPS",
+            60 to "60 FPS",
+            90 to "90 FPS",
+            120 to "120 FPS",
+            144 to "144 FPS",
+        )
+        val fpsDropdown = AutoCompleteTextView(this).apply {
+            inputType = InputType.TYPE_NULL
+            setAdapter(ArrayAdapter(
+                this@SettingsActivity,
+                android.R.layout.simple_dropdown_item_1line,
+                fpsOptions.map { it.second }
+            ))
+        }
+        val fpsLayout = TextInputLayout(
+            this, null,
+            com.google.android.material.R.attr.textInputOutlinedExposedDropdownMenuStyle
+        ).apply {
+            hint = "Max FPS"
+            endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
+            addView(fpsDropdown)
+        }
+        perf.addView(fpsLayout, layoutParams())
+
+        val currentFps = prefs.getInt(KEY_MAX_FPS, 0)
+        val fpsIdx = fpsOptions.indexOfFirst { it.first == currentFps }.let { if (it < 0) 0 else it }
+        fpsDropdown.setText(fpsOptions[fpsIdx].second, false)
+        fpsDropdown.setOnItemClickListener { _, _, position, _ ->
+            prefs.edit().putInt(KEY_MAX_FPS, fpsOptions[position].first).apply()
+        }
+
+        val memOptions = mutableListOf(0 to "Unlimited")
+        for (gb in 1..16) memOptions.add((gb * 1024) to "$gb GB")
+
+        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memInfo = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        val rawMemMB = (memInfo.totalMem / (1024L * 1024L)).toInt()
+        val phoneMemMB = ((rawMemMB + 1023) / 1024) * 1024
+
+        val memAdapter = object : ArrayAdapter<String>(
+            this, android.R.layout.simple_dropdown_item_1line, memOptions.map { it.second }
+        ) {
+            override fun areAllItemsEnabled() = false
+            override fun isEnabled(position: Int) = memOptions[position].first <= phoneMemMB
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = super.getView(position, convertView, parent)
+                (v as? TextView)?.alpha = if (isEnabled(position)) 1f else 0.4f
+                return v
+            }
+        }
+        val memDropdown = AutoCompleteTextView(this).apply {
+            inputType = InputType.TYPE_NULL
+            setAdapter(memAdapter)
+        }
+        val memLayout = TextInputLayout(
+            this, null,
+            com.google.android.material.R.attr.textInputOutlinedExposedDropdownMenuStyle
+        ).apply {
+            hint = "Max memory (Device: ${phoneMemMB / 1024} GB)"
+            endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
+            addView(memDropdown)
+        }
+        perf.addView(memLayout, layoutParams().apply { topMargin = dp(16) })
+
+        val currentMem = prefs.getInt(KEY_MAX_MEMORY_MB, 0)
+        val memIdx = memOptions.indexOfFirst { it.first == currentMem }.let { if (it < 0) 0 else it }
+        memDropdown.setText(memOptions[memIdx].second, false)
+        memDropdown.setOnItemClickListener { _, _, position, _ ->
+            if (memOptions[position].first > phoneMemMB) {
+                memDropdown.setText(memOptions[memIdx].second, false)
+                return@setOnItemClickListener
+            }
+            prefs.edit().putInt(KEY_MAX_MEMORY_MB, memOptions[position].first).apply()
+        }
+
+        val perfHint = TextView(this).apply {
+            text = "It is recommened to limit FPS, as it makes it more stable and reduces thermal issues."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
+        }
+        perf.addView(perfHint, layoutParams().apply { topMargin = dp(12) })
+
+        content.addView(perfCard, cardParams())
+
         return ScrollView(this).apply {
             isFillViewport = true
             addView(content)
@@ -569,138 +799,19 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun sendLogs(button: MaterialButton) {
-        val lastSend = prefs.getLong(KEY_LAST_LOG_SEND, 0)
-        val now = System.currentTimeMillis()
-        if (now - lastSend < LOG_SEND_COOLDOWN) {
-            val remaining = ((LOG_SEND_COOLDOWN - (now - lastSend)) / 1000).toInt()
-            Toast.makeText(this, "Please wait ${remaining}s before sending again", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         button.isEnabled = false
         button.text = "Sending..."
-
-        Thread {
-            try {
-                runOnUiThread { button.text = "Reading logs..." }
-                // collect Player.log which is where stderr (so the vulkan shim etc.) go to
-                val playerSb = StringBuilder()
-                playerSb.appendLine("------ Device info -----")
-                playerSb.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
-                playerSb.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                playerSb.appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
-                playerSb.appendLine("Board: ${Build.BOARD}")
-                playerSb.appendLine("Hardware: ${Build.HARDWARE}")
-                playerSb.appendLine("Vulkan driver: ${getVulkanDriver(this)}")
-                playerSb.appendLine("Resolution: ${getResolution(this)}")
-                playerSb.appendLine()
-
-                val playerLog = File(
-                    filesDir,
-                    "rootfs/home/user/.config/unity3d/Polytoria/Polytoria Client/Player.log"
-                )
-                if (playerLog.exists()) {
-                    val lines = playerLog.readLines()
-                    val start = (lines.size - 5000).coerceAtLeast(0)
-                    for (i in start until lines.size) {
-                        val line = lines[i]
-                        // filter Box64's signal spam
-                        if (line.contains("sigaction handler for sig ")) continue
-                        if (line.contains("Signal ") && line.contains("si_addr=")) continue
-                        if (line.contains("Warning, calling Signal ") && line.contains("SIG_IGN")) continue
-                        playerSb.appendLine(line)
-                    }
-                } else {
-                    playerSb.appendLine("Player.log not found")
-                }
-                val playerBytes = playerSb.toString().toByteArray(Charsets.UTF_8)
-
-                // collect logcat
-                val logcatSb = StringBuilder()
-                try {
-                    val proc = Runtime.getRuntime().exec(arrayOf(
-                        "logcat", "-d", "-v", "time",
-                        "PolyDroid2:*", "PolyDroid2-Vulkan:*", "PolyDroid2-window:*",
-                        "Box64:*", "BOX64:*",
-                        "*:S"
-                    ))
-                    val allLines = proc.inputStream.bufferedReader().readLines()
-                    proc.waitFor()
-
-                    val start = (allLines.size - 1000).coerceAtLeast(0)
-                    for (i in start until allLines.size) {
-                        logcatSb.appendLine(allLines[i])
-                    }
-
-                    if (allLines.isEmpty()) {
-                        logcatSb.appendLine("No matching logcat entries found")
-                    }
-                } catch (e: Exception) {
-                    logcatSb.appendLine("Failed to read logcat: ${e.message}")
-                }
-                val logcatBytes = logcatSb.toString().toByteArray(Charsets.UTF_8)
-
-                runOnUiThread { button.text = "Sending..." }
-
-                val boundary = "----PolyDroid${System.currentTimeMillis()}"
-                val message = "${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} | ${Build.HARDWARE}"
-
-                val body = java.io.ByteArrayOutputStream()
-                fun writePart(s: String) { body.write(s.toByteArray(Charsets.UTF_8)) }
-
-                writePart("--$boundary\r\n")
-                writePart("Content-Disposition: form-data; name=\"content\"\r\n\r\n")
-                writePart("$message\r\n")
-
-                writePart("--$boundary\r\n")
-                writePart("Content-Disposition: form-data; name=\"files[0]\"; filename=\"player.log\"\r\n")
-                writePart("Content-Type: text/plain\r\n\r\n")
-                body.write(playerBytes)
-                writePart("\r\n")
-
-                writePart("--$boundary\r\n")
-                writePart("Content-Disposition: form-data; name=\"files[1]\"; filename=\"logcat.log\"\r\n")
-                writePart("Content-Type: text/plain\r\n\r\n")
-                body.write(logcatBytes)
-                writePart("\r\n")
-
-                writePart("--$boundary--\r\n")
-
-                val bodyBytes = body.toByteArray()
-
-                val url = URL(WEBHOOK_URL)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                conn.setRequestProperty("Content-Length", bodyBytes.size.toString())
-                conn.setFixedLengthStreamingMode(bodyBytes.size)
-                conn.connectTimeout = 20000
-                conn.readTimeout = 20000
-
-                conn.outputStream.use { it.write(bodyBytes) }
-                val responseCode = conn.responseCode
-                conn.disconnect()
-
+        sendLogsStatic(
+            this,
+            onProgress = { msg -> runOnUiThread { button.text = msg } },
+            onDone = { _, msg ->
                 runOnUiThread {
-                    if (responseCode in 200..299) {
-                        prefs.edit().putLong(KEY_LAST_LOG_SEND, System.currentTimeMillis()).apply()
-                        Toast.makeText(this, "Logs sent!", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "Failed to send! got HTTP error: $responseCode", Toast.LENGTH_SHORT).show()
-                    }
-                    button.isEnabled = true
-                    button.text = "Send app logs"
-                }
-            } catch (e: Exception) {
-                Log.e("PolyDroid2", "failed to send logs: ${e.message}", e)
-                runOnUiThread {
-                    Toast.makeText(this, "Failed with: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
                     button.isEnabled = true
                     button.text = "Send app logs"
                 }
             }
-        }.start()
+        )
     }
 
     private fun dp(value: Int): Int =

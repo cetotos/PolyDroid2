@@ -9,7 +9,7 @@ object Box64Launcher {
 
     private var process: Process? = null
 
-    fun launch(ctx: Context, tmpDir: String, gameArgs: String = "", screenWidth: Int = 1280, screenHeight: Int = 720, onLog: (String) -> Unit): Process {
+    fun launch(ctx: Context, tmpDir: String, gameArgs: String = "", screenWidth: Int = 1280, screenHeight: Int = 720, onLog: (String) -> Unit, onExit: ((Int) -> Unit)? = null): Process {
         val root = RootFs.rootDir(ctx)
         val rootPath = root.absolutePath
         val nativeDir = ctx.applicationInfo.nativeLibraryDir
@@ -165,6 +165,8 @@ object Box64Launcher {
             // screen resolution for surface
             put("POLYDROID_SCREEN_WIDTH", "$screenWidth")
             put("POLYDROID_SCREEN_HEIGHT", "$screenHeight")
+            val maxFps = SettingsActivity.getMaxFps(ctx)
+            if (maxFps > 0) put("POLYDROID_MAX_FPS", "$maxFps")
             put("SSL_CERT_FILE", "$rootPath/etc/ssl/certs/ca-certificates.crt")
             put("SSL_CERT_DIR", "$rootPath/etc/ssl/certs")
             put("CURL_CA_BUNDLE", "$rootPath/etc/ssl/certs/ca-certificates.crt")
@@ -198,10 +200,12 @@ object Box64Launcher {
         val envExports = env.entries.joinToString("\n") { (k, v) ->
             "export $k=\"$v\""
         }
+        val maxMemoryMB = SettingsActivity.getMaxMemoryMB(ctx)
+        val ulimitLine = if (maxMemoryMB > 0) "ulimit -v ${maxMemoryMB * 1024}\n" else ""
 
         launchScript.writeText("""#!/bin/sh
 $envExports
-
+$ulimitLine
 cd "$rootPath/polytoria"
 exec ${execPrefix}"$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -force-vulkan$gameArgStr
 """)
@@ -245,6 +249,7 @@ exec ${execPrefix}"$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client
             val exit = proc.waitFor()
             Log.i(TAG, "Box64 exited with code $exit")
             onLog("Box64 exited with code $exit")
+            onExit?.invoke(exit)
         }, "box64-wait").start()
 
         return proc
