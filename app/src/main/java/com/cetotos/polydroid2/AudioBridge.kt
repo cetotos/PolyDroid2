@@ -69,6 +69,13 @@ object AudioBridge {
                 }
             }
             val channelMask = if (channels >= 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+            val bytesPerSample = when (encoding) {
+                AudioFormat.ENCODING_PCM_8BIT -> 1
+                AudioFormat.ENCODING_PCM_16BIT -> 2
+                AudioFormat.ENCODING_PCM_FLOAT -> 4
+                else -> 2
+            }
+            val frameSize = bytesPerSample * if (channels >= 2) 2 else 1
             val minBuf = AudioTrack.getMinBufferSize(rate, channelMask, encoding)
             val bufSize = maxOf(minBuf * 2, 16384)
             track = AudioTrack.Builder()
@@ -89,14 +96,21 @@ object AudioBridge {
             Log.i(TAG, "opened track rate=$rate ch=$channels encoding=$encoding buf=$bufSize")
 
             val buf = ByteArray(8192)
+            var leftover = 0
             while (running) {
-                val n = input.read(buf)
+                val n = input.read(buf, leftover, buf.size - leftover)
                 if (n <= 0) break
+                val total = n + leftover
+                val aligned = total - (total % frameSize)
                 var off = 0
-                while (off < n) {
-                    val w = track.write(buf, off, n - off, AudioTrack.WRITE_BLOCKING)
+                while (off < aligned) {
+                    val w = track.write(buf, off, aligned - off, AudioTrack.WRITE_BLOCKING)
                     if (w <= 0) break
                     off += w
+                }
+                leftover = total - aligned
+                if (leftover > 0) {
+                    System.arraycopy(buf, aligned, buf, 0, leftover)
                 }
             }
         } catch (e: Exception) {

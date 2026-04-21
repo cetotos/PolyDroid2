@@ -11,7 +11,7 @@ import java.util.zip.GZIPInputStream
 
 object RootFs {
     private const val TAG = "PolyDroid2"
-    private const val VERSION = 6
+    private const val VERSION = 7
     private const val LIBS_VERSION = 4
 
     private val LIB_ASSETS = listOf(
@@ -256,32 +256,53 @@ object RootFs {
         Log.i(TAG, "Extracted successfuly")
     }
 
-    // remove the sound effects audio because they sound corrupted
-    // this means no explosion, jump or footstep sounds
-    // but they sound very glitchy anyways
-    fun silenceBuiltInSfx(polyDir: File) {
+    fun deleteSfx(polyDir: File) {
         val res = File(polyDir, "Polytoria Client_Data/resources.resource")
         if (!res.exists()) return
         val marker = File(polyDir, ".pd_sfx_silenced")
-        if (marker.exists() && marker.readText().trim() == res.length().toString()) return
+        val sizeStr = res.length().toString()
+        if (marker.exists() && marker.readText().trim() == sizeStr) return
         try {
-            val len = res.length()
-            java.io.RandomAccessFile(res, "rw").use { raf ->
-                val zeros = ByteArray(65536)
-                var remaining = len
-                raf.seek(0)
-                while (remaining > 0) {
-                    val n = minOf(remaining, zeros.size.toLong()).toInt()
-                    raf.write(zeros, 0, n)
-                    remaining -= n
+            val bytes = res.readBytes()
+            var banks = 0
+            var bytesZeroed = 0L
+            var pos = 0
+            while (pos + 24 <= bytes.size) {
+                if (bytes[pos] != 'F'.code.toByte() || bytes[pos + 1] != 'S'.code.toByte() ||
+                    bytes[pos + 2] != 'B'.code.toByte() || bytes[pos + 3] != '5'.code.toByte()) {
+                    pos++
+                    continue
                 }
+                val version = readLE32(bytes, pos + 4)
+                val sampleHdrSize = readLE32(bytes, pos + 12)
+                val nameTblSize = readLE32(bytes, pos + 16)
+                val dataSize = readLE32(bytes, pos + 20)
+                val fixedHdr = if (version == 1) 60 else 56
+                val dataStart = pos + fixedHdr + sampleHdrSize + nameTblSize
+                val dataEnd = dataStart + dataSize
+                if (dataEnd > bytes.size || dataSize <= 0) { pos++; continue }
+                for (i in dataStart until dataEnd) bytes[i] = 0
+                banks++
+                bytesZeroed += dataSize.toLong()
+                pos = dataEnd
             }
-            marker.writeText(len.toString())
-            Log.i(TAG, "audio delete success ($len bytes)")
+            if (banks > 0) {
+                res.writeBytes(bytes)
+                marker.writeText(res.length().toString())
+                Log.i(TAG, "silenced $banks FSB5 banks ($bytesZeroed bytes)")
+            } else {
+                Log.i(TAG, "no FSB5 banks found")
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "audio delete failed: ${e.message}")
+            Log.w(TAG, "deleteSfx failed: ${e.message}")
         }
     }
+
+    private fun readLE32(b: ByteArray, o: Int): Int =
+        (b[o].toInt() and 0xff) or
+        ((b[o + 1].toInt() and 0xff) shl 8) or
+        ((b[o + 2].toInt() and 0xff) shl 16) or
+        ((b[o + 3].toInt() and 0xff) shl 24)
 
     private fun copyAssetCounted(ctx: Context, asset: String, dest: File, progress: Progress) {
         ctx.assets.open(asset).use { raw ->

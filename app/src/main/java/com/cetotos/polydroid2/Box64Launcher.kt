@@ -21,7 +21,7 @@ object Box64Launcher {
         File(root, "polytoria/libdecor-0.so.0").delete()
         File(root, "polytoria/libdecor-cairo.so").delete()
         File(root, "polytoria/unity.lock").delete()
-        RootFs.silenceBuiltInSfx(File(root, "polytoria"))
+        RootFs.deleteSfx(File(root, "polytoria"))
         File("$rootPath/tmp").mkdirs()
         File("$rootPath/tmp/.X11-unix").apply { mkdirs(); setReadable(true, false); setExecutable(true, false); setWritable(true, false) }
 
