@@ -21,7 +21,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.browser.customtabs.CustomTabsIntent
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.termux.x11.CmdEntryPoint
@@ -376,11 +375,11 @@ class GameActivity : AppCompatActivity() {
         val pad = dp(24)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, dp(8), pad, 0)
+            setPadding(pad, dp(8), pad, dp(20))
         }
 
         val msg = TextView(this).apply {
-            text = "Box64 exited with code $exitCode."
+            text = "Box64 exited with code $exitCode"
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
         }
         content.addView(msg, LinearLayout.LayoutParams(
@@ -410,39 +409,32 @@ class GameActivity : AppCompatActivity() {
             .create()
 
         sendBtn.setOnClickListener {
-            sendBtn.isEnabled = false
-            sendBtn.text = "Sending..."
-            SettingsActivity.sendLogsStatic(
-                this,
-                extraInfo = "CRASH exit=$exitCode",
-                onProgress = { s -> runOnUiThread { sendBtn.text = s } },
-                onDone = { _, m ->
-                    runOnUiThread {
-                        Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
-                        sendBtn.isEnabled = true
-                        sendBtn.text = "Send logs"
-                    }
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Send logs?")
+                .setMessage("This will send your app logs and Unity logs to the developer which helps to fix bugs. No personal info will be included in logs.")
+                .setPositiveButton("Send") { _, _ ->
+                    sendBtn.isEnabled = false
+                    sendBtn.text = "Sending..."
+                    SettingsActivity.sendLogsStatic(
+                        this,
+                        extraInfo = "box64 exit code=$exitCode",
+                        onProgress = { s -> runOnUiThread { sendBtn.text = s } },
+                        onDone = { _, m ->
+                            runOnUiThread {
+                                Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
+                                sendBtn.isEnabled = true
+                                sendBtn.text = "Send logs"
+                            }
+                        }
+                    )
                 }
-            )
+                .setNegativeButton("Cancel", null)
+                .show()
         }
 
         websiteBtn.setOnClickListener {
-            try {
-                CustomTabsIntent.Builder()
-                    .setShowTitle(false)
-                    .setUrlBarHidingEnabled(true)
-                    .build()
-                    .launchUrl(this, android.net.Uri.parse("https://polytoria.com/home"))
-            } catch (e: Exception) {
-                try {
-                    startActivity(android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse("https://polytoria.com/home")
-                    ))
-                } catch (_: Exception) {}
-            }
             dialog.dismiss()
-            finish()
+            finishAndRemoveTask()
         }
 
         dialog.show()
@@ -577,7 +569,11 @@ class GameActivity : AppCompatActivity() {
         return try {
             File("/sys/class/kgsl/kgsl-3d0/gpu_model").readText().trim()
         } catch (_: Exception) {
-            try { android.os.Build.SOC_MODEL } catch (_: Exception) { android.os.Build.HARDWARE }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                try { android.os.Build.SOC_MODEL } catch (_: Exception) { android.os.Build.HARDWARE }
+            } else {
+                android.os.Build.HARDWARE
+            }
         }
     }
 
