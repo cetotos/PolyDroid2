@@ -22,14 +22,24 @@ class OverlayEditorView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
 
-    enum class Which { JOYSTICK, JUMP, IME, ITEMBAR }
+    sealed class Which {
+        object JOYSTICK : Which()
+        object JUMP : Which()
+        object IME : Which()
+        object ITEMBAR : Which()
+        object SPRINT : Which()
+        data class CUSTOM(val id: String) : Which()
+    }
 
-    private data class ButtonState(
+    private class ButtonState(
         var xFrac: Float,
         var yFrac: Float,
         var scale: Float,
         val radiusDp: Float,
         val which: Which,
+        var label: String = "",
+        var scanCode: Int = 0,
+        var toggle: Boolean = false,
     )
 
     private val density = context.resources.displayMetrics.density
@@ -38,19 +48,35 @@ class OverlayEditorView @JvmOverloads constructor(
     private val jump: ButtonState
     private val ime: ButtonState
     private val itemBar: ButtonState
+    private val sprint: ButtonState
+    private val customList = mutableListOf<ButtonState>()
 
     init {
         val j = SettingsActivity.getOverlayJoystick(context)
         val jp = SettingsActivity.getOverlayJump(context)
         val im = SettingsActivity.getOverlayIme(context)
         val ib = SettingsActivity.getOverlayItemBar(context)
+        val sp = SettingsActivity.getOverlaySprint(context)
         joystick = ButtonState(j.xFrac, j.yFrac, j.scale, TouchControlOverlay.JOYSTICK_RADIUS_DP, Which.JOYSTICK)
         jump = ButtonState(jp.xFrac, jp.yFrac, jp.scale, 35f, Which.JUMP)
         ime = ButtonState(im.xFrac, im.yFrac, im.scale, 32f, Which.IME)
         itemBar = ButtonState(ib.xFrac, ib.yFrac, ib.scale, TouchControlOverlay.ITEMBAR_CELL_DP, Which.ITEMBAR)
+        sprint = ButtonState(sp.xFrac, sp.yFrac, sp.scale, TouchControlOverlay.SPRINT_RADIUS_DP, Which.SPRINT, label = "Sprint",
+            toggle = SettingsActivity.getSprintToggle(context))
+        for (ck in SettingsActivity.getCustomKeys(context)) {
+            customList.add(ButtonState(
+                ck.xFrac, ck.yFrac, ck.scale,
+                TouchControlOverlay.CUSTOM_RADIUS_DP,
+                Which.CUSTOM(ck.id),
+                label = ck.label,
+                scanCode = ck.scanCode,
+                toggle = ck.toggle,
+            ))
+        }
     }
 
-    private val buttons = listOf(joystick, jump, ime, itemBar)
+    private val fixedButtons = listOf(joystick, jump, ime, itemBar, sprint)
+    private val buttons get() = fixedButtons + customList
 
     var selected: Which = Which.JOYSTICK
         private set
@@ -137,7 +163,6 @@ class OverlayEditorView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        // desired height = preview height + some padding
         val desiredPreviewH = (w / aspectRatio).toInt()
         val h = desiredPreviewH + (16 * density).toInt()
         setMeasuredDimension(w, h)
@@ -198,6 +223,7 @@ class OverlayEditorView @JvmOverloads constructor(
         drawJump(canvas, jump)
         drawIme(canvas, ime)
         drawItemBar(canvas, itemBar)
+        for (b in listOf(sprint) + customList) drawLabelButton(canvas, b)
     }
 
     private fun drawItemBar(canvas: Canvas, b: ButtonState) {
@@ -267,6 +293,16 @@ class OverlayEditorView @JvmOverloads constructor(
         if (selected == b.which) canvas.drawRect(imeRect, selectPaint)
     }
 
+    private fun drawLabelButton(canvas: Canvas, b: ButtonState) {
+        val (cx, cy) = buttonCenter(b)
+        val r = buttonPreviewRadius(b)
+        canvas.drawCircle(cx, cy, r, fillPaint)
+        canvas.drawCircle(cx, cy, r, strokePaint)
+        labelPaint.textSize = r * 0.7f
+        canvas.drawText(b.label, cx, cy + labelPaint.textSize / 3f, labelPaint)
+        if (selected == b.which) canvas.drawCircle(cx, cy, r + 4f * density, selectPaint)
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val x = event.x
@@ -309,7 +345,6 @@ class OverlayEditorView @JvmOverloads constructor(
     }
 
     private fun findHit(x: Float, y: Float): ButtonState? {
-        // prefer currently selected first so overlapping stay stable
         val order = buttons.sortedByDescending { it.which == selected }
         val minHalf = 20f * density
         for (b in order) {
@@ -335,6 +370,92 @@ class OverlayEditorView @JvmOverloads constructor(
 
     fun selectedScale(): Float = current()?.scale ?: 1f
 
+    fun select(which: Which) {
+        if (buttons.any { it.which == which }) {
+            selected = which
+            onSelectionChanged?.invoke(which, selectedScale())
+            invalidate()
+        }
+    }
+
+    fun addCustomKey(ck: SettingsActivity.CustomKey) {
+        customList.add(ButtonState(
+            ck.xFrac, ck.yFrac, ck.scale,
+            TouchControlOverlay.CUSTOM_RADIUS_DP,
+            Which.CUSTOM(ck.id),
+            label = ck.label,
+            scanCode = ck.scanCode,
+            toggle = ck.toggle,
+        ))
+        val added = customList.last()
+        clampToPreview(added)
+        saveCustomAll()
+        selected = added.which
+        onSelectionChanged?.invoke(added.which, added.scale)
+        onChanged?.invoke()
+        invalidate()
+    }
+
+    fun removeCustomKey(id: String) {
+        val idx = customList.indexOfFirst { (it.which as? Which.CUSTOM)?.id == id }
+        if (idx < 0) return
+        customList.removeAt(idx)
+        if ((selected as? Which.CUSTOM)?.id == id) {
+            selected = Which.JOYSTICK
+            onSelectionChanged?.invoke(selected, selectedScale())
+        }
+        saveCustomAll()
+        onChanged?.invoke()
+        invalidate()
+    }
+
+    fun updateCustomKey(id: String, label: String, scanCode: Int, toggle: Boolean) {
+        val b = customList.firstOrNull { (it.which as? Which.CUSTOM)?.id == id } ?: return
+        b.label = label
+        b.scanCode = scanCode
+        b.toggle = toggle
+        saveCustomAll()
+        invalidate()
+    }
+
+    fun setSelectedToggle(toggle: Boolean) {
+        val b = current() ?: return
+        when (b.which) {
+            Which.SPRINT -> {
+                b.toggle = toggle
+                SettingsActivity.setSprintToggle(context, toggle)
+            }
+            is Which.CUSTOM -> {
+                b.toggle = toggle
+                saveCustomAll()
+            }
+            else -> return
+        }
+        onChanged?.invoke()
+    }
+
+    fun selectedToggle(): Boolean? {
+        val b = current() ?: return null
+        return when (b.which) {
+            Which.SPRINT, is Which.CUSTOM -> b.toggle
+            else -> null
+        }
+    }
+
+    fun selectedCustomId(): String? = (selected as? Which.CUSTOM)?.id
+
+    fun customKeys(): List<SettingsActivity.CustomKey> = customList.map { b ->
+        SettingsActivity.CustomKey(
+            id = (b.which as Which.CUSTOM).id,
+            label = b.label,
+            scanCode = b.scanCode,
+            xFrac = b.xFrac,
+            yFrac = b.yFrac,
+            scale = b.scale,
+            toggle = b.toggle,
+        )
+    }
+
     fun resetAll() {
         joystick.xFrac = SettingsActivity.DEFAULT_JOYSTICK_X
         joystick.yFrac = SettingsActivity.DEFAULT_JOYSTICK_Y
@@ -348,7 +469,10 @@ class OverlayEditorView @JvmOverloads constructor(
         itemBar.xFrac = SettingsActivity.DEFAULT_ITEMBAR_X
         itemBar.yFrac = SettingsActivity.DEFAULT_ITEMBAR_Y
         itemBar.scale = 1f
-        for (b in buttons) {
+        sprint.xFrac = SettingsActivity.DEFAULT_SPRINT_X
+        sprint.yFrac = SettingsActivity.DEFAULT_SPRINT_Y
+        sprint.scale = 1f
+        for (b in fixedButtons) {
             clampToPreview(b)
             save(b)
         }
@@ -381,7 +505,20 @@ class OverlayEditorView @JvmOverloads constructor(
                     .putFloat(SettingsActivity.KEY_ITEMBAR_Y, b.yFrac)
                     .putFloat(SettingsActivity.KEY_ITEMBAR_SCALE, b.scale)
             }
+            Which.SPRINT -> {
+                e.putFloat(SettingsActivity.KEY_SPRINT_X, b.xFrac)
+                    .putFloat(SettingsActivity.KEY_SPRINT_Y, b.yFrac)
+                    .putFloat(SettingsActivity.KEY_SPRINT_SCALE, b.scale)
+            }
+            is Which.CUSTOM -> {
+                saveCustomAll()
+                return
+            }
         }
         e.apply()
+    }
+
+    private fun saveCustomAll() {
+        SettingsActivity.saveCustomKeys(context, customKeys())
     }
 }

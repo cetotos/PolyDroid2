@@ -200,12 +200,9 @@ object Box64Launcher {
         val envExports = env.entries.joinToString("\n") { (k, v) ->
             "export $k=\"$v\""
         }
-        val maxMemoryMB = SettingsActivity.getMaxMemoryMB(ctx)
-        val ulimitLine = if (maxMemoryMB > 0) "ulimit -v ${maxMemoryMB * 1024}\n" else ""
 
         launchScript.writeText("""#!/bin/sh
 $envExports
-$ulimitLine
 cd "$rootPath/polytoria"
 exec ${execPrefix}"$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -force-vulkan$gameArgStr
 """)

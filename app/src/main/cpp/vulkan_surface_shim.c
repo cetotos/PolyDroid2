@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <android/native_window.h>
 #include <android/hardware_buffer.h>
+#include <android/log.h>
 
 typedef struct native_handle {
     int version;
@@ -63,6 +64,20 @@ static void shim_log(const char* level, const char* fmt, ...) {
 
 #define LOGI(...) shim_log("I", __VA_ARGS__)
 #define LOGE(...) shim_log("E", __VA_ARGS__)
+
+static long g_max_fps_interval_ns = 0;
+
+__attribute__((constructor))
+void shim_startup_log(void) {
+    const char* e = getenv("POLYDROID_MAX_FPS");
+    int fps = (e && *e) ? atoi(e) : 0;
+    g_max_fps_interval_ns = (fps > 0) ? (1000000000L / fps) : 0;
+    __android_log_print(ANDROID_LOG_INFO, "PolyDroid2-Vulkan",
+        "shim loaded, POLYDROID_MAX_FPS='%s' -> fps=%d interval_ns=%ld",
+        e ? e : "(unset)", fps, g_max_fps_interval_ns);
+    LOGI("shim loaded, POLYDROID_MAX_FPS='%s' -> fps=%d interval_ns=%ld",
+         e ? e : "(unset)", fps, g_max_fps_interval_ns);
+}
 
 static char g_gpu_name[64] = "";
 static uint32_t g_vk_api_version = 0;
@@ -1596,14 +1611,8 @@ static VkResult shim_vkQueuePresentKHR(
     static uint32_t unity_fps = 0;
     static struct timespec fps_start = {0, 0};
 
-    static long max_fps_interval_ns = -1;
     static struct timespec last_present = {0, 0};
-    if (max_fps_interval_ns < 0) {
-        const char* e = getenv("POLYDROID_MAX_FPS");
-        int fps = (e && *e) ? atoi(e) : 0;
-        max_fps_interval_ns = (fps > 0) ? (1000000000L / fps) : 0;
-        if (max_fps_interval_ns > 0) LOGI("FPS cap: %d (%ld ns/frame)", fps, max_fps_interval_ns);
-    }
+    long max_fps_interval_ns = g_max_fps_interval_ns;
     if (max_fps_interval_ns > 0) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
@@ -1613,7 +1622,7 @@ static VkResult shim_vkQueuePresentKHR(
             long wait_ns = (target_s - now.tv_sec) * 1000000000L + (target_ns - now.tv_nsec);
             if (wait_ns > 0 && wait_ns < 500000000L) {
                 struct timespec req = { .tv_sec = 0, .tv_nsec = wait_ns };
-                nanosleep(&req, NULL);
+                while (nanosleep(&req, &req) == -1 && errno == EINTR) {}
             }
             if (wait_ns > 0) {
                 last_present.tv_sec = target_s;

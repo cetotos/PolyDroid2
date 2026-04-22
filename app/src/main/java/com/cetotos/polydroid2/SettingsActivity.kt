@@ -34,6 +34,18 @@ import java.net.URL
 
 class SettingsActivity : AppCompatActivity() {
 
+    data class OverlayButton(val xFrac: Float, val yFrac: Float, val scale: Float)
+
+    data class CustomKey(
+        val id: String,
+        val label: String,
+        val scanCode: Int,
+        val xFrac: Float,
+        val yFrac: Float,
+        val scale: Float,
+        val toggle: Boolean,
+    )
+
     companion object {
         const val PREFS_NAME = "polydroid_settings"
         const val KEY_RESOLUTION = "resolution"
@@ -48,7 +60,6 @@ class SettingsActivity : AppCompatActivity() {
         const val VULKAN_DRIVER_SYSTEM = "system"
         const val VULKAN_DRIVER_TURNIP = "turnip"
         const val KEY_MAX_FPS = "max_fps"
-        const val KEY_MAX_MEMORY_MB = "max_memory_mb"
         const val KEY_LAST_LOG_SEND = "last_log_send_time"
         const val LOG_SEND_COOLDOWN = 180 * 1000L
         const val DEFAULT_RESOLUTION = 720
@@ -66,6 +77,11 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_ITEMBAR_X = "overlay_itembar_x"
         const val KEY_ITEMBAR_Y = "overlay_itembar_y"
         const val KEY_ITEMBAR_SCALE = "overlay_itembar_scale"
+        const val KEY_SPRINT_X = "overlay_sprint_x"
+        const val KEY_SPRINT_Y = "overlay_sprint_y"
+        const val KEY_SPRINT_SCALE = "overlay_sprint_scale"
+        const val KEY_SPRINT_TOGGLE = "overlay_sprint_toggle"
+        const val KEY_CUSTOM_KEYS = "overlay_custom_keys"
 
         const val DEFAULT_JOYSTICK_X = 0.13f
         const val DEFAULT_JOYSTICK_Y = 0.72f
@@ -75,6 +91,21 @@ class SettingsActivity : AppCompatActivity() {
         const val DEFAULT_IME_Y = 0.94f
         const val DEFAULT_ITEMBAR_X = 0.5f
         const val DEFAULT_ITEMBAR_Y = 0.08f
+        const val DEFAULT_SPRINT_X = 0.82f
+        const val DEFAULT_SPRINT_Y = 0.65f
+
+        val KEY_OPTIONS: List<Pair<String, Int>> = listOf(
+            "A" to 30, "B" to 48, "C" to 46, "D" to 32, "E" to 18, "F" to 33,
+            "G" to 34, "H" to 35, "I" to 23, "J" to 36, "K" to 37, "L" to 38,
+            "M" to 50, "N" to 49, "O" to 24, "P" to 25, "Q" to 16, "R" to 19,
+            "S" to 31, "T" to 20, "U" to 22, "V" to 47, "W" to 17, "X" to 45,
+            "Y" to 21, "Z" to 44,
+            "1" to 2, "2" to 3, "3" to 4, "4" to 5, "5" to 6,
+            "6" to 7, "7" to 8, "8" to 9, "9" to 10, "0" to 11,
+            "Tab" to 15, "Enter" to 28, "Esc" to 1,
+            "Shift" to 42, "Ctrl" to 29, "Alt" to 56,
+            "F1" to 59, "F2" to 60, "F3" to 61, "F4" to 62,
+        )
 
         // if you decoded this, please dont spam it. Thanks
         private const val REPORT_KEY = "very-secure-key-ok-dont-spam-it-bots-thanks"
@@ -96,7 +127,54 @@ class SettingsActivity : AppCompatActivity() {
             1440 to "1440p",
         )
 
-        data class OverlayButton(val xFrac: Float, val yFrac: Float, val scale: Float)
+        fun getSprintToggle(ctx: Context): Boolean {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return p.getBoolean(KEY_SPRINT_TOGGLE, false)
+        }
+
+        fun setSprintToggle(ctx: Context, v: Boolean) {
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putBoolean(KEY_SPRINT_TOGGLE, v).apply()
+        }
+
+        fun getCustomKeys(ctx: Context): List<CustomKey> {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val s = p.getString(KEY_CUSTOM_KEYS, null) ?: return emptyList()
+            return try {
+                val arr = org.json.JSONArray(s)
+                val out = ArrayList<CustomKey>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    out.add(CustomKey(
+                        id = o.getString("id"),
+                        label = o.getString("label"),
+                        scanCode = o.getInt("scanCode"),
+                        xFrac = o.getDouble("x").toFloat(),
+                        yFrac = o.getDouble("y").toFloat(),
+                        scale = o.getDouble("scale").toFloat(),
+                        toggle = o.getBoolean("toggle"),
+                    ))
+                }
+                out
+            } catch (_: Exception) { emptyList() }
+        }
+
+        fun saveCustomKeys(ctx: Context, list: List<CustomKey>) {
+            val arr = org.json.JSONArray()
+            for (k in list) {
+                val o = org.json.JSONObject()
+                o.put("id", k.id)
+                o.put("label", k.label)
+                o.put("scanCode", k.scanCode)
+                o.put("x", k.xFrac.toDouble())
+                o.put("y", k.yFrac.toDouble())
+                o.put("scale", k.scale.toDouble())
+                o.put("toggle", k.toggle)
+                arr.put(o)
+            }
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putString(KEY_CUSTOM_KEYS, arr.toString()).apply()
+        }
 
         fun getCameraSensitivity(ctx: Context): Float {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -121,11 +199,6 @@ class SettingsActivity : AppCompatActivity() {
         fun getMaxFps(ctx: Context): Int {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             return prefs.getInt(KEY_MAX_FPS, 0)
-        }
-
-        fun getMaxMemoryMB(ctx: Context): Int {
-            val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            return prefs.getInt(KEY_MAX_MEMORY_MB, 0)
         }
 
         fun sendLogsStatic(
@@ -296,6 +369,16 @@ class SettingsActivity : AppCompatActivity() {
                 p.getFloat(KEY_ITEMBAR_SCALE, 1f),
             )
         }
+
+        fun getOverlaySprint(ctx: Context): OverlayButton {
+            val p = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return OverlayButton(
+                p.getFloat(KEY_SPRINT_X, DEFAULT_SPRINT_X),
+                p.getFloat(KEY_SPRINT_Y, DEFAULT_SPRINT_Y),
+                p.getFloat(KEY_SPRINT_SCALE, 1f),
+            )
+        }
+
     }
 
     private lateinit var prefs: android.content.SharedPreferences
@@ -592,7 +675,12 @@ class SettingsActivity : AppCompatActivity() {
             endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
             addView(fpsDropdown)
         }
+
+        fpsLayout.isEnabled = false // disabled for now because it doesn't work
+        fpsDropdown.isEnabled = false // ^^^^
+
         perf.addView(fpsLayout, layoutParams())
+
 
         val currentFps = prefs.getInt(KEY_MAX_FPS, 0)
         val fpsIdx = fpsOptions.indexOfFirst { it.first == currentFps }.let { if (it < 0) 0 else it }
@@ -601,52 +689,8 @@ class SettingsActivity : AppCompatActivity() {
             prefs.edit().putInt(KEY_MAX_FPS, fpsOptions[position].first).apply()
         }
 
-        val memOptions = mutableListOf(0 to "Unlimited")
-        for (gb in 1..16) memOptions.add((gb * 1024) to "$gb GB")
-
-        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-        val memInfo = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-        val rawMemMB = (memInfo.totalMem / (1024L * 1024L)).toInt()
-        val phoneMemMB = ((rawMemMB + 1023) / 1024) * 1024
-
-        val memAdapter = object : ArrayAdapter<String>(
-            this, android.R.layout.simple_dropdown_item_1line, memOptions.map { it.second }
-        ) {
-            override fun areAllItemsEnabled() = false
-            override fun isEnabled(position: Int) = memOptions[position].first <= phoneMemMB
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val v = super.getView(position, convertView, parent)
-                (v as? TextView)?.alpha = if (isEnabled(position)) 1f else 0.4f
-                return v
-            }
-        }
-        val memDropdown = AutoCompleteTextView(this).apply {
-            inputType = InputType.TYPE_NULL
-            setAdapter(memAdapter)
-        }
-        val memLayout = TextInputLayout(
-            this, null,
-            com.google.android.material.R.attr.textInputOutlinedExposedDropdownMenuStyle
-        ).apply {
-            hint = "Max memory (Device: ${phoneMemMB / 1024} GB)"
-            endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
-            addView(memDropdown)
-        }
-        perf.addView(memLayout, layoutParams().apply { topMargin = dp(16) })
-
-        val currentMem = prefs.getInt(KEY_MAX_MEMORY_MB, 0)
-        val memIdx = memOptions.indexOfFirst { it.first == currentMem }.let { if (it < 0) 0 else it }
-        memDropdown.setText(memOptions[memIdx].second, false)
-        memDropdown.setOnItemClickListener { _, _, position, _ ->
-            if (memOptions[position].first > phoneMemMB) {
-                memDropdown.setText(memOptions[memIdx].second, false)
-                return@setOnItemClickListener
-            }
-            prefs.edit().putInt(KEY_MAX_MEMORY_MB, memOptions[position].first).apply()
-        }
-
         val perfHint = TextView(this).apply {
-            text = "It is recommened to limit FPS, as it makes it more stable and reduces thermal issues."
+            text = "Currently broken"
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
             setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
         }
@@ -712,22 +756,104 @@ class SettingsActivity : AppCompatActivity() {
         }
         overlay.addView(scaleSlider, layoutParams())
 
+        val toggleSwitch = MaterialSwitch(this).apply {
+            text = "Toggle mode"
+            visibility = View.GONE
+        }
+        overlay.addView(toggleSwitch, layoutParams().apply { topMargin = dp(8) })
+
+        val customLabel = TextView(this).apply {
+            text = "Custom key"
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
+            visibility = View.GONE
+        }
+        overlay.addView(customLabel, layoutParams().apply { topMargin = dp(8) })
+
+        val customRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+        }
+        val keyDropdown = AutoCompleteTextView(this).apply {
+            inputType = InputType.TYPE_NULL
+            setAdapter(ArrayAdapter(
+                this@SettingsActivity,
+                android.R.layout.simple_dropdown_item_1line,
+                KEY_OPTIONS.map { it.first }
+            ))
+        }
+        val keyDropdownLayout = TextInputLayout(
+            this, null,
+            com.google.android.material.R.attr.textInputOutlinedExposedDropdownMenuStyle
+        ).apply {
+            hint = "Key"
+            endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
+            addView(keyDropdown)
+        }
+        customRow.addView(keyDropdownLayout, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val removeBtn = MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = "Remove"
+        }
+        customRow.addView(removeBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = dp(8) })
+        overlay.addView(customRow, layoutParams().apply { topMargin = dp(4) })
+
+        val addBtn = MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = "Add custom key"
+        }
+        overlay.addView(addBtn, layoutParams().apply { topMargin = dp(8) })
+
         fun renderScaleLabel(which: OverlayEditorView.Which, scale: Float) {
             val name = when (which) {
                 OverlayEditorView.Which.JOYSTICK -> "Joystick"
                 OverlayEditorView.Which.JUMP -> "Jump"
                 OverlayEditorView.Which.IME -> "IME"
                 OverlayEditorView.Which.ITEMBAR -> "Item bar"
+                OverlayEditorView.Which.SPRINT -> "Sprint"
+                is OverlayEditorView.Which.CUSTOM -> "Custom key"
             }
             scaleLabel.text = "$name size: ${"%.2f".format(scale)}x"
         }
 
+        fun refreshSelectionControls() {
+            val t = editor.selectedToggle()
+            if (t != null) {
+                toggleSwitch.visibility = View.VISIBLE
+                toggleSwitch.setOnCheckedChangeListener(null)
+                toggleSwitch.isChecked = t
+                toggleSwitch.setOnCheckedChangeListener { _, checked ->
+                    editor.setSelectedToggle(checked)
+                }
+            } else {
+                toggleSwitch.visibility = View.GONE
+            }
+            val cid = editor.selectedCustomId()
+            if (cid != null) {
+                customLabel.visibility = View.VISIBLE
+                customRow.visibility = View.VISIBLE
+                val ck = editor.customKeys().firstOrNull { it.id == cid }
+                if (ck != null) {
+                    keyDropdown.setText(ck.label, false)
+                }
+            } else {
+                customLabel.visibility = View.GONE
+                customRow.visibility = View.GONE
+            }
+        }
+
         renderScaleLabel(editor.selected, editor.selectedScale())
         scaleSlider.value = editor.selectedScale()
+        refreshSelectionControls()
 
         editor.onSelectionChanged = { which, scale ->
             renderScaleLabel(which, scale)
             scaleSlider.value = scale.coerceIn(scaleSlider.valueFrom, scaleSlider.valueTo)
+            refreshSelectionControls()
         }
 
         scaleSlider.addOnChangeListener { _, value, fromUser ->
@@ -735,6 +861,33 @@ class SettingsActivity : AppCompatActivity() {
                 editor.setSelectedScale(value)
                 renderScaleLabel(editor.selected, value)
             }
+        }
+
+        keyDropdown.setOnItemClickListener { _, _, position, _ ->
+            val cid = editor.selectedCustomId() ?: return@setOnItemClickListener
+            val (label, scan) = KEY_OPTIONS[position]
+            val existing = editor.customKeys().firstOrNull { it.id == cid } ?: return@setOnItemClickListener
+            editor.updateCustomKey(cid, label, scan, existing.toggle)
+        }
+
+        removeBtn.setOnClickListener {
+            val cid = editor.selectedCustomId() ?: return@setOnClickListener
+            editor.removeCustomKey(cid)
+            refreshSelectionControls()
+            scaleSlider.value = editor.selectedScale()
+            renderScaleLabel(editor.selected, editor.selectedScale())
+        }
+
+        addBtn.setOnClickListener {
+            val (label, scan) = KEY_OPTIONS[0]
+            val id = "ck_${System.currentTimeMillis()}"
+            editor.addCustomKey(SettingsActivity.CustomKey(
+                id = id, label = label, scanCode = scan,
+                xFrac = 0.5f, yFrac = 0.5f, scale = 1f, toggle = false,
+            ))
+            scaleSlider.value = editor.selectedScale()
+            renderScaleLabel(editor.selected, editor.selectedScale())
+            refreshSelectionControls()
         }
 
         val resetButton = MaterialButton(
@@ -745,6 +898,7 @@ class SettingsActivity : AppCompatActivity() {
                 editor.resetAll()
                 scaleSlider.value = editor.selectedScale()
                 renderScaleLabel(editor.selected, editor.selectedScale())
+                refreshSelectionControls()
             }
         }
         overlay.addView(resetButton, LinearLayout.LayoutParams(

@@ -31,6 +31,8 @@ class TouchControlOverlay(
         const val JUMP_RADIUS_DP = 35f
         const val ITEMBAR_CELL_DP = 60f
         const val ITEMBAR_CELLS = 3
+        const val SPRINT_RADIUS_DP = 32f
+        const val CUSTOM_RADIUS_DP = 30f
 
         private const val TAP_MAX_MS = 250L
         private const val TAP_MAX_PX = 25f
@@ -40,12 +42,33 @@ class TouchControlOverlay(
         private const val SCAN_S = 31
         private const val SCAN_D = 32
         private const val SCAN_SPACE = 57
+        private const val SCAN_SHIFT = 42
+        private const val SCAN_I = 23
+        private const val SCAN_O = 24
         private val ITEMBAR_SCANS = intArrayOf(2, 3, 4)
         private const val INPUT_BUTTON_DOWN = 2
         private const val INPUT_BUTTON_UP = 3
         private const val INPUT_MOTION = 1
         private const val MOUSE_LEFT = 1
         private const val MOUSE_RIGHT = 3
+    }
+
+    private class KeyButton(
+        val scanCode: Int,
+        val label: String,
+        val toggle: Boolean,
+        val radiusDp: Float,
+        layout: SettingsActivity.OverlayButton,
+        density: Float,
+    ) {
+        val scale = layout.scale
+        val xFrac = layout.xFrac
+        val yFrac = layout.yFrac
+        val radius = radiusDp * density * layout.scale
+        var cx = 0f
+        var cy = 0f
+        var pointerId = -1
+        var toggleActive = false
     }
 
     private val density = context.resources.displayMetrics.density
@@ -57,6 +80,22 @@ class TouchControlOverlay(
     private val itemBarCell = ITEMBAR_CELL_DP * density * itemBarLayout.scale
     private val itemBarWidth = itemBarCell * ITEMBAR_CELLS
     private val itemBarHeight = itemBarCell
+
+    private val sprintBtn = KeyButton(
+        SCAN_SHIFT, "Sprint",
+        SettingsActivity.getSprintToggle(context),
+        SPRINT_RADIUS_DP,
+        SettingsActivity.getOverlaySprint(context),
+        density,
+    )
+    private val customBtns: List<KeyButton> = SettingsActivity.getCustomKeys(context).map { ck ->
+        KeyButton(
+            ck.scanCode, ck.label, ck.toggle, CUSTOM_RADIUS_DP,
+            SettingsActivity.OverlayButton(ck.xFrac, ck.yFrac, ck.scale),
+            density,
+        )
+    }
+    private val keyButtons = listOf(sprintBtn) + customBtns
 
     private var joystickPointerId = -1
     private var joystickCenterX = 0f
@@ -81,6 +120,12 @@ class TouchControlOverlay(
     private var cameraDeltaY = 0f
 
     private var jumpPointerId = -1
+
+    private var pinchPointer1Id = -1
+    private var pinchPointer2Id = -1
+    private var pinchLastDist = 0f
+    private var pinchAccum = 0f
+    private val pinchStepPx = 40f * density
 
     private var itemBarCenterX = 0f
     private var itemBarCenterY = 0f
@@ -131,6 +176,21 @@ class TouchControlOverlay(
         strokeJoin = Paint.Join.ROUND
     }
     private val jumpArrowPath = Path()
+    private val keyFillPaint = Paint().apply {
+        color = Color.argb(60, 255, 255, 255)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val keyFillActivePaint = Paint().apply {
+        color = Color.argb(160, 255, 255, 255)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val keyLabelPaint = Paint().apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        isAntiAlias = true
+    }
 
     private val arcInactivePaint = Paint().apply {
         color = Color.argb(30, 255, 255, 255)
@@ -173,12 +233,23 @@ class TouchControlOverlay(
             itemBarCenterX + itemBarWidth / 2f,
             itemBarCenterY + itemBarHeight / 2f,
         )
+        for (b in keyButtons) {
+            b.cx = b.xFrac * w
+            b.cy = b.yFrac * h
+        }
     }
 
     private fun itemBarCellIndex(x: Float, y: Float): Int {
         if (!itemBarRect.contains(x, y)) return -1
         val rel = (x - itemBarRect.left) / itemBarCell
         return rel.toInt().coerceIn(0, ITEMBAR_CELLS - 1)
+    }
+
+    private fun hitKeyButton(x: Float, y: Float): KeyButton? {
+        for (b in keyButtons) {
+            if (hypot(x - b.cx, y - b.cy) <= b.radius * 1.2f) return b
+        }
+        return null
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -208,6 +279,20 @@ class TouchControlOverlay(
                     return true
                 }
 
+                val kb = hitKeyButton(x, y)
+                if (kb != null && kb.pointerId == -1) {
+                    if (kb.toggle) {
+                        kb.toggleActive = !kb.toggleActive
+                        sendKey(kb.scanCode, 0, kb.toggleActive)
+                        kb.pointerId = pid
+                    } else {
+                        kb.pointerId = pid
+                        sendKey(kb.scanCode, 0, true)
+                    }
+                    invalidate()
+                    return true
+                }
+
                 val hitSize = joystickRadius + joystickHitboxPadding
                 val inJoystick = x >= joystickCenterX - hitSize && x <= joystickCenterX + hitSize &&
                         y >= joystickCenterY - hitSize && y <= joystickCenterY + hitSize
@@ -217,20 +302,50 @@ class TouchControlOverlay(
                     joystickKnobY = joystickCenterY
                     joystickActive = true
                     invalidate()
-                } else if (!inJoystick && cameraPointerId == -1 && jumpPointerId != pid) {
-                    cameraPointerId = pid
-                    cameraStartX = x
-                    cameraStartY = y
-                    cameraLastX = x
-                    cameraLastY = y
-                    cameraStartTime = System.currentTimeMillis()
-                    cameraDragging = false
-                    cameraMoved = false
+                } else if (!inJoystick && jumpPointerId != pid) {
+                    if (cameraPointerId == -1 && pinchPointer1Id == -1) {
+                        cameraPointerId = pid
+                        cameraStartX = x
+                        cameraStartY = y
+                        cameraLastX = x
+                        cameraLastY = y
+                        cameraStartTime = System.currentTimeMillis()
+                        cameraDragging = false
+                        cameraMoved = false
+                    } else if (pinchPointer1Id == -1 && cameraPointerId != -1 && cameraPointerId != pid) {
+                        val otherIdx = event.findPointerIndex(cameraPointerId)
+                        if (otherIdx >= 0) {
+                            endCameraDragIfActive()
+                            pinchPointer1Id = cameraPointerId
+                            pinchPointer2Id = pid
+                            cameraPointerId = -1
+                            val ox = event.getX(otherIdx)
+                            val oy = event.getY(otherIdx)
+                            pinchLastDist = hypot(x - ox, y - oy)
+                            pinchAccum = 0f
+                        }
+                    }
                 }
                 return true
             }
 
             MotionEvent.ACTION_MOVE -> {
+                if (pinchPointer1Id != -1 && pinchPointer2Id != -1) {
+                    val i1 = event.findPointerIndex(pinchPointer1Id)
+                    val i2 = event.findPointerIndex(pinchPointer2Id)
+                    if (i1 >= 0 && i2 >= 0) {
+                        val dist = hypot(event.getX(i1) - event.getX(i2), event.getY(i1) - event.getY(i2))
+                        pinchAccum += dist - pinchLastDist
+                        pinchLastDist = dist
+                        if (pinchAccum >= pinchStepPx) {
+                            sendZoomTap(SCAN_I)
+                            pinchAccum = 0f
+                        } else if (pinchAccum <= -pinchStepPx) {
+                            sendZoomTap(SCAN_O)
+                            pinchAccum = 0f
+                        }
+                    }
+                }
                 for (i in 0 until event.pointerCount) {
                     val pid = event.getPointerId(i)
                     val x = event.getX(i)
@@ -251,6 +366,10 @@ class TouchControlOverlay(
 
                 if (pid == joystickPointerId) {
                     releaseJoystick()
+                } else if (pid == pinchPointer1Id || pid == pinchPointer2Id) {
+                    pinchPointer1Id = -1
+                    pinchPointer2Id = -1
+                    pinchAccum = 0f
                 } else if (pid == cameraPointerId) {
                     releaseCamera()
                 } else if (pid == jumpPointerId) {
@@ -265,6 +384,13 @@ class TouchControlOverlay(
                             invalidate()
                         }
                     }
+                    for (b in keyButtons) {
+                        if (b.pointerId == pid) {
+                            b.pointerId = -1
+                            if (!b.toggle) sendKey(b.scanCode, 0, false)
+                            invalidate()
+                        }
+                    }
                 }
                 return true
             }
@@ -272,15 +398,29 @@ class TouchControlOverlay(
             MotionEvent.ACTION_CANCEL -> {
                 if (joystickPointerId != -1) releaseJoystick()
                 if (cameraPointerId != -1) releaseCamera()
+                if (pinchPointer1Id != -1 || pinchPointer2Id != -1) {
+                    pinchPointer1Id = -1
+                    pinchPointer2Id = -1
+                    pinchAccum = 0f
+                }
                 if (jumpPointerId != -1) {
                     jumpPointerId = -1
                     sendKey(SCAN_SPACE, 0, false)
-                    invalidate()
                 }
                 for (c in 0 until ITEMBAR_CELLS) {
                     if (itemBarActiveCell[c] != -1) {
                         itemBarActiveCell[c] = -1
                         sendKey(ITEMBAR_SCANS[c], 0, false)
+                    }
+                }
+                for (b in keyButtons) {
+                    if (b.pointerId != -1) {
+                        b.pointerId = -1
+                        if (!b.toggle) sendKey(b.scanCode, 0, false)
+                    }
+                    if (b.toggle && b.toggleActive) {
+                        b.toggleActive = false
+                        sendKey(b.scanCode, 0, false)
                     }
                 }
                 invalidate()
@@ -369,6 +509,19 @@ class TouchControlOverlay(
         invalidate()
     }
 
+    private fun endCameraDragIfActive() {
+        if (cameraDragging) {
+            sendInput(INPUT_BUTTON_UP, MOUSE_RIGHT, cameraDeltaX.toInt(), cameraDeltaY.toInt())
+        }
+        cameraDragging = false
+        cameraMoved = false
+    }
+
+    private fun sendZoomTap(scan: Int) {
+        sendKey(scan, 0, true)
+        postDelayed(Runnable { sendKey(scan, 0, false) }, 50L)
+    }
+
     private fun releaseCamera() {
         val elapsed = System.currentTimeMillis() - cameraStartTime
 
@@ -448,5 +601,13 @@ class TouchControlOverlay(
             )
         }
         canvas.drawRoundRect(itemBarRect, radius, radius, itemBarDividerPaint)
+
+        for (b in keyButtons) {
+            val isActive = if (b.toggle) b.toggleActive else b.pointerId != -1
+            canvas.drawCircle(b.cx, b.cy, b.radius, if (isActive) keyFillActivePaint else keyFillPaint)
+            canvas.drawCircle(b.cx, b.cy, b.radius, joystickOutlinePaint)
+            keyLabelPaint.textSize = b.radius * 0.7f
+            canvas.drawText(b.label, b.cx, b.cy + keyLabelPaint.textSize / 3f, keyLabelPaint)
+        }
     }
 }

@@ -31,6 +31,7 @@ target_link_options(vulkan_surface_shim PRIVATE "-Wl,-soname,libvulkan.so.1")
 target_link_libraries(vulkan_surface_shim
     dl
     nativewindow
+    log
 )
 
 
