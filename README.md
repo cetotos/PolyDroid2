@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> PolyDroid 2 is **not** an official client, and it is still in beta! Expect bugs/missing features, and report them in the issues tab located here(https://github.com/cetotos/PolyDroid2/issues)
+> PolyDroid 2 is **not** an official client, and it is still in beta! Expect bugs/missing features, and report them in the issues tab located [here](https://github.com/cetotos/PolyDroid2/issues).
 
 
 # PolyDroid 2
