@@ -358,6 +358,7 @@ class GameActivity : AppCompatActivity() {
         if (isFinishing) {
             Box64Launcher.stop()
             AudioBridge.stop()
+            ClientProxy.stop()
         }
         wakeLock?.let { if (it.isHeld) it.release() }
     }

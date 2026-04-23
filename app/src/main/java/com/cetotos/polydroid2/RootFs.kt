@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 object RootFs {
     private const val TAG = "PolyDroid2"
     private const val VERSION = 7
-    private const val LIBS_VERSION = 4
+    private const val LIBS_VERSION = 5
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",
@@ -35,6 +35,7 @@ object RootFs {
         "glibc-x86_64/libpulse-simple.so.0",
         "glibc-x86_64/libdbus-1.so.3",
         "glibc-x86_64/libaudio_trace.so",
+        "glibc-x86_64/libconnect_redirect.so",
         "glibc-x86_64/libtimer_shim.so",
         "libudev_stub.so",
         "libssl.so.1.0.0",
@@ -384,6 +385,7 @@ object RootFs {
             "libpulse.so.0", "libpulse-simple.so.0",
             "libdbus-1.so.3",
             "libaudio_trace.so",
+            "libconnect_redirect.so",
             "libtimer_shim.so"
         )
         for (lib in glibcLibs) {

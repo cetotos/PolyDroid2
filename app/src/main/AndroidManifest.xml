@@ -51,6 +51,11 @@
             android:exported="false"
             android:screenOrientation="portrait" />
         <activity
+            android:name=".PolytoriaSettingsActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:parentActivityName=".SettingsActivity" />
+        <activity
             android:name=".GameActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|touchscreen|density|uiMode"

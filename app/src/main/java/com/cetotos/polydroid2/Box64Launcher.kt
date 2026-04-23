@@ -22,6 +22,7 @@ object Box64Launcher {
         File(root, "polytoria/libdecor-cairo.so").delete()
         File(root, "polytoria/unity.lock").delete()
         RootFs.deleteSfx(File(root, "polytoria"))
+        try { PolytoriaPrefs.applyTo(ctx, root) } catch (e: Exception) { Log.w(TAG, "polytoria prefs apply failed: ${e.message}") }
         File("$rootPath/tmp").mkdirs()
         File("$rootPath/tmp/.X11-unix").apply { mkdirs(); setReadable(true, false); setExecutable(true, false); setWritable(true, false) }
 
@@ -50,9 +51,14 @@ object Box64Launcher {
         val hostsBuilder = StringBuilder("127.0.0.1 localhost\n")
         for (hostname in listOf("api.polytoria.com", "polytoria.com")) {
             try {
-                val addr = java.net.InetAddress.getByName(hostname)
-                hostsBuilder.append("${addr.hostAddress} $hostname\n")
-                Log.i(TAG, "Resolved $hostname -> ${addr.hostAddress}")
+                val addrs = java.net.InetAddress.getAllByName(hostname)
+                val v4 = addrs.firstOrNull { it is java.net.Inet4Address }
+                if (v4 != null) {
+                    hostsBuilder.append("${v4.hostAddress} $hostname\n")
+                    Log.i(TAG, "Resolved $hostname -> ${v4.hostAddress}")
+                } else {
+                    Log.w(TAG, "No IPv4 for $hostname (got: ${addrs.joinToString { it.hostAddress ?: "?" }})")
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to resolve $hostname: ${e.message}")
             }
@@ -85,6 +91,27 @@ object Box64Launcher {
             } else {
                 Log.w(TAG, "No certs found at /system/etc/security/cacerts")
             }
+        }
+        // append proxy ca so the game trusts ClientProxt
+        try {
+            val proxyCa = ctx.assets.open("proxy_ca.crt").use { it.readBytes().toString(Charsets.UTF_8) }
+            val current = caBundle.readText()
+            if (!current.contains("PolyDroid2 Local Proxy CA")) {
+                caBundle.appendText("\n" + proxyCa)
+                Log.i(TAG, "appended proxy ca to ca-certificates.crt")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to append proxy ca: ${e.message}")
+        }
+
+        // start ClientProxy to fix connection
+        val proxyPort = ClientProxy.start(ctx)
+        val polytoriaIp: String = try {
+            java.net.InetAddress.getAllByName("api.polytoria.com")
+                .firstOrNull { it is java.net.Inet4Address }?.hostAddress ?: ""
+        } catch (e: Exception) {
+            Log.w(TAG, "could not resolve api.polytoria.com for redirect: ${e.message}")
+            ""
         }
 
         val arm64NativeDir = File("$rootPath/usr/lib/arm64-native")
@@ -121,7 +148,7 @@ object Box64Launcher {
                 "librt.so.1")
 
             var ldPreload = ""
-            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$rootPath/usr/lib/x86_64-linux-gnu/libaudio_trace.so:$ldPreload"
+            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$rootPath/usr/lib/x86_64-linux-gnu/libaudio_trace.so:$rootPath/usr/lib/x86_64-linux-gnu/libconnect_redirect.so:$ldPreload"
             put("BOX64_LD_PRELOAD", ldPreload.trimEnd(':'))
             put("BOX64_LOG", "1") // level 2 will give WAY too much do not use it the Player.log ends up being GIGABYTES big
             put("BOX64_SHOWSEGV", "1")
@@ -167,6 +194,12 @@ object Box64Launcher {
             put("POLYDROID_SCREEN_HEIGHT", "$screenHeight")
             val maxFps = SettingsActivity.getMaxFps(ctx)
             if (maxFps > 0) put("POLYDROID_MAX_FPS", "$maxFps")
+            // connect redirect: send api.polytoria.com traffic to our local proxy
+            if (polytoriaIp.isNotBlank() && proxyPort > 0) {
+                put("POLYDROID_REDIRECT_FROM_IP", polytoriaIp)
+                put("POLYDROID_REDIRECT_TO_IP", "127.0.0.1")
+                put("POLYDROID_REDIRECT_TO_PORT", "$proxyPort")
+            }
             put("SSL_CERT_FILE", "$rootPath/etc/ssl/certs/ca-certificates.crt")
             put("SSL_CERT_DIR", "$rootPath/etc/ssl/certs")
             put("CURL_CA_BUNDLE", "$rootPath/etc/ssl/certs/ca-certificates.crt")

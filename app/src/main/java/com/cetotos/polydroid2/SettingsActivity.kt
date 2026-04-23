@@ -60,6 +60,19 @@ class SettingsActivity : AppCompatActivity() {
         const val VULKAN_DRIVER_SYSTEM = "system"
         const val VULKAN_DRIVER_TURNIP = "turnip"
         const val KEY_MAX_FPS = "max_fps"
+
+        const val KEY_POLY_QUALITY_LEVEL = "poly_quality_level"
+        const val KEY_POLY_POST_PROCESSING = "poly_post_processing"
+        const val KEY_POLY_PIXEL_LIGHT_COUNT = "poly_pixel_light_count"
+        const val KEY_POLY_SHADOW_DISTANCE = "poly_shadow_distance"
+        const val KEY_POLY_SHADOW_RESOLUTION = "poly_shadow_resolution"
+        const val KEY_POLY_TEXTURE_QUALITY = "poly_texture_quality"
+        const val KEY_POLY_ANTI_ALIASING = "poly_anti_aliasing"
+        const val KEY_POLY_ANISOTROPIC = "poly_anisotropic"
+        const val KEY_POLY_FULLSCREEN = "poly_fullscreen"
+        const val KEY_POLY_MASTER_VOLUME = "poly_master_volume"
+        const val KEY_POLY_PRESET = "poly_preset"
+        const val DEFAULT_POLY_PRESET = "Low"
         const val KEY_LAST_LOG_SEND = "last_log_send_time"
         const val LOG_SEND_COOLDOWN = 180 * 1000L
         const val DEFAULT_RESOLUTION = 720
@@ -645,6 +658,16 @@ class SettingsActivity : AppCompatActivity() {
         driverDropdown.setOnItemClickListener { _, _, position, _ ->
             prefs.edit().putString(KEY_VULKAN_DRIVER, driverOptions[position].first).apply()
         }
+
+        val polytoriaButton = MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = "Polytoria graphics settings"
+            setOnClickListener {
+                startActivity(android.content.Intent(this@SettingsActivity, PolytoriaSettingsActivity::class.java))
+            }
+        }
+        graphics.addView(polytoriaButton, layoutParams().apply { topMargin = dp(16) })
 
         content.addView(graphicsCard, cardParams())
 
