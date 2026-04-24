@@ -1,0 +1,3 @@
+[submodule "external/box64"]
+	path = external/box64
+	url = https://github.com/cetotos/box64-PolyDroid.git

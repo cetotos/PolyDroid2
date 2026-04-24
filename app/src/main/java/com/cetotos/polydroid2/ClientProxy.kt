@@ -11,6 +11,8 @@ import java.net.InetAddress
 import java.net.URL
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.Security
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -24,6 +26,11 @@ object ClientProxy {
     private const val UPSTREAM = "api.polytoria.com"
     private const val KEYSTORE_PASS = "polydroid2"
 
+    init {
+        Security.removeProvider("BC")
+        Security.insertProviderAt(BouncyCastleProvider(), 1)
+    }
+
     @Volatile private var server: SSLServerSocket? = null
     @Volatile private var running = false
     @Volatile private var actualPort = 0
@@ -32,7 +39,7 @@ object ClientProxy {
 
     fun start(ctx: Context): Int {
         if (running) return actualPort
-        val ks = KeyStore.getInstance("PKCS12")
+        val ks = KeyStore.getInstance("PKCS12", "BC")
         ctx.assets.open("proxy_server.p12").use { ks.load(it, KEYSTORE_PASS.toCharArray()) }
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
         kmf.init(ks, KEYSTORE_PASS.toCharArray())

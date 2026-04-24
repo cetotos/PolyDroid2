@@ -55,6 +55,7 @@ dependencies {
     implementation("androidx.browser:browser:1.8.0")
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("org.tukaani:xz:1.10")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
