@@ -104,6 +104,7 @@ static void* g_real_vulkan = NULL;
 static int g_using_system_driver = 0;
 
 static PFN_vkGetInstanceProcAddr real_vkGetInstanceProcAddr = NULL;
+static PFN_vkGetDeviceProcAddr real_vkGetDeviceProcAddr = NULL;
 static PFN_vkCreateInstance real_vkCreateInstance = NULL;
 static PFN_vkEnumerateInstanceExtensionProperties real_vkEnumerateInstanceExtensionProperties = NULL;
 
@@ -1906,9 +1907,32 @@ static VkResult shim_vkEnumerateDeviceExtensionProperties(
     return (copyCount < totalCount) ? VK_INCOMPLETE : VK_SUCCESS;
 }
 
+static PFN_vkVoidFunction shim_vkGetDeviceProcAddr(VkDevice device, const char* pName) {
+    if (strcmp(pName, "vkQueuePresentKHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkQueuePresentKHR;
+    if (strcmp(pName, "vkCreateSwapchainKHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkCreateSwapchainKHR;
+    if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkDestroySwapchainKHR;
+    if (strcmp(pName, "vkGetSwapchainImagesKHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkGetSwapchainImagesKHR;
+    if (strcmp(pName, "vkAcquireNextImageKHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkAcquireNextImageKHR;
+
+    if (!real_vkGetDeviceProcAddr && real_vkGetInstanceProcAddr && g_instance) {
+        real_vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)
+            real_vkGetInstanceProcAddr(g_instance, "vkGetDeviceProcAddr");
+    }
+    if (real_vkGetDeviceProcAddr)
+        return real_vkGetDeviceProcAddr(device, pName);
+    return NULL;
+}
+
 PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
     load_real_vulkan();
 
+    if (strcmp(pName, "vkGetDeviceProcAddr") == 0)
+        return (PFN_vkVoidFunction)shim_vkGetDeviceProcAddr;
     if (strcmp(pName, "vkCreateInstance") == 0)
         return (PFN_vkVoidFunction)shim_vkCreateInstance;
     if (strcmp(pName, "vkEnumerateInstanceExtensionProperties") == 0)

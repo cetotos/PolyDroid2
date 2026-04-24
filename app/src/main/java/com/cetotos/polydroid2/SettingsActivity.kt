@@ -211,7 +211,21 @@ class SettingsActivity : AppCompatActivity() {
 
         fun getMaxFps(ctx: Context): Int {
             val prefs = ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            return prefs.getInt(KEY_MAX_FPS, 0)
+            if (prefs.contains(KEY_MAX_FPS)) return prefs.getInt(KEY_MAX_FPS, 0)
+            return defaultMaxFps(ctx)
+        }
+        // set default max fps to screen refresh rate instead of Unlimited
+        private fun defaultMaxFps(ctx: Context): Int {
+            val rate = try {
+                if (android.os.Build.VERSION.SDK_INT >= 30) ctx.display?.refreshRate ?: 60f
+                else {
+                    @Suppress("DEPRECATION")
+                    (ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
+                        .defaultDisplay.refreshRate
+                }
+            } catch (_: Exception) { 60f }
+            val candidates = intArrayOf(30, 45, 60, 90, 120, 144)
+            return candidates.minBy { kotlin.math.abs(it - rate) }
         }
 
         fun sendLogsStatic(
@@ -699,13 +713,10 @@ class SettingsActivity : AppCompatActivity() {
             addView(fpsDropdown)
         }
 
-        fpsLayout.isEnabled = false // disabled for now because it doesn't work
-        fpsDropdown.isEnabled = false // ^^^^
-
         perf.addView(fpsLayout, layoutParams())
 
 
-        val currentFps = prefs.getInt(KEY_MAX_FPS, 0)
+        val currentFps = getMaxFps(this)
         val fpsIdx = fpsOptions.indexOfFirst { it.first == currentFps }.let { if (it < 0) 0 else it }
         fpsDropdown.setText(fpsOptions[fpsIdx].second, false)
         fpsDropdown.setOnItemClickListener { _, _, position, _ ->
@@ -713,7 +724,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         val perfHint = TextView(this).apply {
-            text = "Currently broken"
+            text = "It is recommened to limit your FPS, as it makes FPS more stable and reduces heat."
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
             setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
         }
