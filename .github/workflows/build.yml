@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-36
+            build-tools;35.0.0
+            ndk;29.0.14206865
+            cmake;3.22.1
+
+      - name: Install p7zip
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Build x86 libs
+        run: bash scripts/build-x86.sh
+
+      - name: Fetch assets
+        run: bash scripts/fetch-assets.sh
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: polydroid2-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
