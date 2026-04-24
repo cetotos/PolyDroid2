@@ -318,6 +318,8 @@ class GameActivity : AppCompatActivity() {
                     onExit = { code ->
                         if (code != 0 && !isFinishing) {
                             runOnUiThread { showCrashDialog(code) }
+                        } else if (code == 0 && !isFinishing) {
+                            runOnUiThread { finishAndRemoveTask() }
                         }
                     }
                 )
