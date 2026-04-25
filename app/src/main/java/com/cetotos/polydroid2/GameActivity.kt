@@ -170,6 +170,7 @@ class GameActivity : AppCompatActivity() {
             sendInput = { type, button, x, y -> nativeSendInputEvent(type, button, x, y) },
             sendKey = { scanCode, keyCode, down -> nativeSendKeyEvent(scanCode, keyCode, down) },
             cameraSensitivity = SettingsActivity.getCameraSensitivity(this),
+            newZoom = SettingsActivity.getNewZoom(this),
         )
         frame.addView(touchOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,

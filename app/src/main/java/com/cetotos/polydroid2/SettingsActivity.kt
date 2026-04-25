@@ -53,6 +53,7 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_CUSTOM_WIDTH = "custom_width"
         const val KEY_CUSTOM_HEIGHT = "custom_height"
         const val KEY_CAMERA_SENSITIVITY = "camera_sensitivity"
+        const val KEY_NEW_ZOOM = "new_zoom"
         const val KEY_SHOW_STATS = "show_stats"
         const val KEY_FULLSCREEN = "fullscreen"
         const val KEY_VULKAN_DRIVER = "vulkan_driver"
@@ -187,6 +188,11 @@ class SettingsActivity : AppCompatActivity() {
             }
             ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                 .putString(KEY_CUSTOM_KEYS, arr.toString()).apply()
+        }
+
+        fun getNewZoom(ctx: Context): Boolean {
+            return ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_NEW_ZOOM, false)
         }
 
         fun getCameraSensitivity(ctx: Context): Float {
@@ -763,6 +769,15 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         camera.addView(sensitivitySlider, layoutParams())
+
+        val newZoomSwitch = MaterialSwitch(this).apply {
+            text = "Experimental zoom"
+            isChecked = prefs.getBoolean(KEY_NEW_ZOOM, false)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_NEW_ZOOM, checked).apply()
+            }
+        }
+        camera.addView(newZoomSwitch, layoutParams().apply { topMargin = dp(16) })
 
         content.addView(cameraCard, cardParams(first = true))
 

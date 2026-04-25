@@ -7,5 +7,6 @@
     <mapping directory="$PROJECT_DIR$/ext/fmod-for-unity" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/ext/pulseaudio" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/ext/pulseaudio/pulseaudio" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/external/box64" vcs="Git" />
   </component>
 </project>

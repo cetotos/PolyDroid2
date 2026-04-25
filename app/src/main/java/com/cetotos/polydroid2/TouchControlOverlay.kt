@@ -21,6 +21,7 @@ class TouchControlOverlay(
     private val sendInput: (type: Int, button: Int, x: Int, y: Int) -> Unit,
     private val sendKey: (scanCode: Int, keyCode: Int, down: Boolean) -> Unit,
     private val cameraSensitivity: Float = 3f,
+    private val newZoom: Boolean = false,
 ) : View(context) {
 
     companion object {
@@ -51,6 +52,8 @@ class TouchControlOverlay(
         private const val INPUT_MOTION = 1
         private const val MOUSE_LEFT = 1
         private const val MOUSE_RIGHT = 3
+        private const val MOUSE_WHEEL_UP = 4
+        private const val MOUSE_WHEEL_DOWN = 5
     }
 
     private class KeyButton(
@@ -125,7 +128,11 @@ class TouchControlOverlay(
     private var pinchPointer2Id = -1
     private var pinchLastDist = 0f
     private var pinchAccum = 0f
-    private val pinchStepPx = 40f * density
+    private val pinchStepPx = (if (newZoom) 22f else 40f) * density
+    private var pinchLastCenterY = 0f
+    private var scrollAccum = 0f
+    private val scrollStepPx = 8f * density
+    private val scrollTicksPerStep = 2
 
     private var itemBarCenterX = 0f
     private var itemBarCenterY = 0f
@@ -323,6 +330,8 @@ class TouchControlOverlay(
                             val oy = event.getY(otherIdx)
                             pinchLastDist = hypot(x - ox, y - oy)
                             pinchAccum = 0f
+                            pinchLastCenterY = (y + oy) / 2f
+                            scrollAccum = 0f
                         }
                     }
                 }
@@ -334,15 +343,29 @@ class TouchControlOverlay(
                     val i1 = event.findPointerIndex(pinchPointer1Id)
                     val i2 = event.findPointerIndex(pinchPointer2Id)
                     if (i1 >= 0 && i2 >= 0) {
-                        val dist = hypot(event.getX(i1) - event.getX(i2), event.getY(i1) - event.getY(i2))
+                        val x1 = event.getX(i1); val y1 = event.getY(i1)
+                        val x2 = event.getX(i2); val y2 = event.getY(i2)
+                        val dist = hypot(x1 - x2, y1 - y2)
+                        val centerX = (x1 + x2) / 2f
+                        val centerY = (y1 + y2) / 2f
                         pinchAccum += dist - pinchLastDist
                         pinchLastDist = dist
+                        scrollAccum += centerY - pinchLastCenterY
+                        pinchLastCenterY = centerY
                         if (pinchAccum >= pinchStepPx) {
                             sendZoomTap(SCAN_I)
                             pinchAccum = 0f
                         } else if (pinchAccum <= -pinchStepPx) {
                             sendZoomTap(SCAN_O)
                             pinchAccum = 0f
+                        }
+                        while (scrollAccum >= scrollStepPx) {
+                            repeat(scrollTicksPerStep) { sendWheelTick(MOUSE_WHEEL_UP, centerX, centerY) }
+                            scrollAccum -= scrollStepPx
+                        }
+                        while (scrollAccum <= -scrollStepPx) {
+                            repeat(scrollTicksPerStep) { sendWheelTick(MOUSE_WHEEL_DOWN, centerX, centerY) }
+                            scrollAccum += scrollStepPx
                         }
                     }
                 }
@@ -370,6 +393,7 @@ class TouchControlOverlay(
                     pinchPointer1Id = -1
                     pinchPointer2Id = -1
                     pinchAccum = 0f
+                    scrollAccum = 0f
                 } else if (pid == cameraPointerId) {
                     releaseCamera()
                 } else if (pid == jumpPointerId) {
@@ -402,6 +426,7 @@ class TouchControlOverlay(
                     pinchPointer1Id = -1
                     pinchPointer2Id = -1
                     pinchAccum = 0f
+                    scrollAccum = 0f
                 }
                 if (jumpPointerId != -1) {
                     jumpPointerId = -1
@@ -520,6 +545,15 @@ class TouchControlOverlay(
     private fun sendZoomTap(scan: Int) {
         sendKey(scan, 0, true)
         postDelayed(Runnable { sendKey(scan, 0, false) }, 50L)
+    }
+
+    private fun sendWheelTick(button: Int, screenX: Float, screenY: Float) {
+        val w = if (width > 0) width else 1
+        val h = if (height > 0) height else 1
+        val mx = (screenX / w * renderWidth).toInt().coerceIn(0, renderWidth - 1)
+        val my = (screenY / h * renderHeight).toInt().coerceIn(0, renderHeight - 1)
+        sendInput(INPUT_BUTTON_DOWN, button, mx, my)
+        sendInput(INPUT_BUTTON_UP, button, mx, my)
     }
 
     private fun releaseCamera() {
