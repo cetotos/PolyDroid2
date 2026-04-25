@@ -36,17 +36,29 @@ static int lookup_hosts_file(const char *name, struct addrinfo **res,
 
     char line[512];
     while (fgets(line, sizeof(line), f)) {
+        line[sizeof(line) - 1] = '\0';
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+        if (*p == '#' || *p == '\n' || *p == '\r' || *p == '\0') continue;
 
         char ip[64] = {0};
-        char *tok = strtok(p, " \t\n");
-        if (!tok) continue;
-        strncpy(ip, tok, sizeof(ip) - 1);
+        char *ip_start = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+        size_t ip_len = (size_t)(p - ip_start);
+        if (ip_len == 0 || ip_len >= sizeof(ip)) continue;
+        memcpy(ip, ip_start, ip_len);
+        ip[ip_len] = '\0';
 
-        while ((tok = strtok(NULL, " \t\n")) != NULL) {
-            if (strcasecmp(tok, name) == 0) {
+        for (;;) {
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '\0' || *p == '\n' || *p == '\r' || *p == '#') break;
+            char *h_start = p;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+            char saved = *p;
+            *p = '\0';
+            int matched = (strcasecmp(h_start, name) == 0);
+            *p = saved;
+            if (matched) {
                 fclose(f);
 
                 struct sockaddr_in sa4;
