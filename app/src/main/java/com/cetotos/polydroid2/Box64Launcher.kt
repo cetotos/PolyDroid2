@@ -234,10 +234,15 @@ object Box64Launcher {
             "export $k=\"$v\""
         }
 
+        val box64Cmd = "\"$nativeDir/libbox64.so\" \"$rootPath/polytoria/Polytoria Client.x86_64\" -force-vulkan$gameArgStr"
+        val execLine = if (execPrefix.isNotBlank())
+            "${execPrefix}/system/bin/true >/dev/null 2>&1 && exec $execPrefix$box64Cmd\nexec $box64Cmd"
+        else
+            "exec $box64Cmd"
         launchScript.writeText("""#!/bin/sh
 $envExports
 cd "$rootPath/polytoria"
-exec ${execPrefix}"$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client.x86_64" -force-vulkan$gameArgStr
+$execLine
 """)
         launchScript.setExecutable(true, false)
 
@@ -309,8 +314,23 @@ exec ${execPrefix}"$nativeDir/libbox64.so" "$rootPath/polytoria/Polytoria Client
             if (minF == maxF) return null
             var mask = 0L
             for ((i, f) in freqs) if (f > minF) mask = mask or (1L shl i)
-            if (mask == 0L) null else mask.toString(16)
+            if (mask == 0L) return null
+            val allowed = readCpusAllowed()
+            if (allowed != 0L && (mask and allowed) == 0L) {
+                Log.i(TAG, "big cores ${mask.toString(2)} disjoint from cpuset ${allowed.toString(2)}, not pinning")
+                return null
+            }
+            mask.toString(16)
         } catch (_: Exception) { null }
+    }
+
+    private fun readCpusAllowed(): Long {
+        return try {
+            val line = File("/proc/self/status").readLines()
+                .firstOrNull { it.startsWith("Cpus_allowed:") } ?: return 0L
+            val hex = line.removePrefix("Cpus_allowed:").trim().replace(",", "")
+            if (hex.isEmpty()) 0L else java.math.BigInteger(hex, 16).toLong()
+        } catch (_: Exception) { 0L }
     }
 
     private fun getSystemDnsServers(ctx: Context): List<String> {
