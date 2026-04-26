@@ -1093,12 +1093,10 @@ int XLookupString(XKeyEvent* a, char* b, int c, KeySym* d, XComposeStatus* e) {
 }
 
 int XMapRaised(Display* a, Window b) {
-/*    stub_log("stubx11: XMapRaised(0x%lx)\n", b);
     if (s_x11_fd >= 0 && s_real_window == 0) {
         x11_create_and_map(s_screen.width, s_screen.height);
         s_events_ready = 1;
-        stub_log("stubx11: events enabled\n");
-    }*/
+    }
     return 0;
 }
 
@@ -1133,11 +1131,11 @@ Display* XOpenDisplay(const char* display_name) {
     return &s_display;
 }
 
-/*Status XInitThreads(void) {
+Status XInitThreads(void) {
     const char msg[] = "stubx11: XInitThreads called\n";
     write(2, msg, sizeof(msg) - 1);
     return 1;
-}*/
+}
 
 int XPeekEvent(Display* a, XEvent* b) {
     /* Block — shouldn't be called */

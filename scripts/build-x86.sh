@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CPP="$ROOT/app/src/main/cpp"
-GLIBC_OUT="$ROOT/app/src/main/assets/glibc-x86"
-X86_OUT="$ROOT/app/src/main/assets/x86-libs"
+GLIBC_OUT="$ROOT/app/src/main/assets/glibc-x86_64"
+X86_OUT="$ROOT/app/src/main/assets/x86_64-libs"
 
 mkdir -p "$GLIBC_OUT" "$X86_OUT"
 
