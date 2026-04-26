@@ -801,14 +801,14 @@ static void resolve_device_funcs(VkDevice device) {
 
 static uint32_t find_memory_type(uint32_t typeBits, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties memProps;
-    if (!pfn_getPhysDevMemProps || !g_physical_device) return 0;
+    if (!pfn_getPhysDevMemProps || !g_physical_device) return UINT32_MAX;
     pfn_getPhysDevMemProps(g_physical_device, &memProps);
     for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
         if ((typeBits & (1 << i)) &&
             (memProps.memoryTypes[i].propertyFlags & props) == props)
             return i;
     }
-    return 0;
+    return UINT32_MAX;
 }
 
 static void destroy_pending_images(void) {
@@ -1287,12 +1287,16 @@ static VkResult shim_vkCreateSwapchainKHR(
             VkMemoryRequirements memReq;
             pfn_getImageMemReq(device, g_swapchain_images[i], &memReq);
 
+            uint32_t typeBits = ahbProps.memoryTypeBits & memReq.memoryTypeBits;
+            if (typeBits == 0) typeBits = ahbProps.memoryTypeBits;
+            uint32_t typeIdx = find_memory_type(typeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (typeIdx == UINT32_MAX) typeIdx = find_memory_type(typeBits, 0);
+
             VkMemoryAllocateInfo allocInfo = {
                 .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                 .pNext = &dedicatedInfo,
                 .allocationSize = ahbProps.allocationSize,
-                .memoryTypeIndex = find_memory_type(ahbProps.memoryTypeBits,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                .memoryTypeIndex = typeIdx,
             };
 
             r = pfn_allocMemory(device, &allocInfo, NULL, &g_swapchain_memory[i]);
