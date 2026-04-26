@@ -309,17 +309,18 @@ $execLine
                 } catch (_: Exception) { null }
             }
             if (freqs.isEmpty()) return null
-            val maxF = freqs.maxOf { it.second }
-            val minF = freqs.minOf { it.second }
-            if (minF == maxF) return null
+            val tiers = freqs.map { it.second }.distinct().sorted()
+            if (tiers.size == 1) return null
+            val skipFreq: Long? = if (tiers.size >= 3) tiers.first() else null
             var mask = 0L
-            for ((i, f) in freqs) if (f > minF) mask = mask or (1L shl i)
+            for ((i, f) in freqs) if (f != skipFreq) mask = mask or (1L shl i)
             if (mask == 0L) return null
             val allowed = readCpusAllowed()
             if (allowed != 0L && (mask and allowed) == 0L) {
                 Log.i(TAG, "big cores ${mask.toString(2)} disjoint from cpuset ${allowed.toString(2)}, not pinning")
                 return null
             }
+            Log.i(TAG, "cpu tiers: $tiers | skipping ${skipFreq ?: "none"}")
             mask.toString(16)
         } catch (_: Exception) { null }
     }

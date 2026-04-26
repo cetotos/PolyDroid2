@@ -252,7 +252,7 @@ static int pin_to_big_cores(const char* tag) {
     if (ncpu > PIN_MAX_CPUS) ncpu = PIN_MAX_CPUS;
 
     long freqs[PIN_MAX_CPUS] = {0};
-    long highest = 0, smallest = 0;
+    long highest = 0;
     for (int i = 0; i < ncpu; i++) {
         char path[128];
         snprintf(path, sizeof(path),
@@ -265,16 +265,26 @@ static int pin_to_big_cores(const char* tag) {
         if (v > highest) highest = v;
     }
     if (highest == 0) return 0;
-    smallest = highest;
-    for (int i = 0; i < ncpu; i++)
-        if (freqs[i] > 0 && freqs[i] < smallest) smallest = freqs[i];
-    if (smallest == highest) return 0;
+
+    long tiers[PIN_MAX_CPUS];
+    int ntiers = 0;
+    for (int i = 0; i < ncpu; i++) {
+        if (freqs[i] <= 0) continue;
+        int seen = 0;
+        for (int j = 0; j < ntiers; j++) if (tiers[j] == freqs[i]) { seen = 1; break; }
+        if (!seen) tiers[ntiers++] = freqs[i];
+    }
+    if (ntiers <= 1) return 0;
+    long smallest = tiers[0];
+    for (int j = 1; j < ntiers; j++) if (tiers[j] < smallest) smallest = tiers[j];
+
+    long skip = (ntiers >= 3) ? smallest : 0;
 
     cpu_set_t set;
     CPU_ZERO(&set);
     int count = 0;
     for (int i = 0; i < ncpu; i++) {
-        if (freqs[i] > smallest) { CPU_SET(i, &set); count++; }
+        if (freqs[i] > 0 && freqs[i] != skip) { CPU_SET(i, &set); count++; }
     }
     if (count == 0) return 0;
 
@@ -282,8 +292,8 @@ static int pin_to_big_cores(const char* tag) {
         LOGI("%s: sched_setaffinity failed: %s", tag, strerror(errno));
         return 0;
     }
-    LOGI("%s: using %d big cores (max: %ld kHz, excluded: %ld kHz)",
-         tag, count, highest, smallest);
+    LOGI("%s: using %d big cores (tiers=%d, max=%ld kHz, skipped=%ld kHz)",
+         tag, count, ntiers, highest, skip);
     return count;
 }
 
