@@ -39,6 +39,7 @@ class GameActivity : AppCompatActivity() {
     private lateinit var lorieView: LorieView
     private lateinit var imeCapture: ImeCaptureView
     private lateinit var vulkanSurface: SurfaceView
+    private lateinit var thermalBanner: TextView
     private var inputHandler: TouchInputHandler? = null
     private var cmdEntryPoint: CmdEntryPoint? = null
     private var lorieShim: LorieMainActivity? = null
@@ -46,6 +47,14 @@ class GameActivity : AppCompatActivity() {
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var vulkanSurfaceReady = false
     @Volatile private var crashDialogShown = false
+    @Volatile private var overheatDialogShown = false
+    private var lastThermalStatus = 0
+    private val thermalBannerHideRunnable = Runnable {
+        if (::thermalBanner.isInitialized) thermalBanner.visibility = android.view.View.GONE
+    }
+    private val thermalListener = PowerManager.OnThermalStatusChangedListener { status ->
+        runOnUiThread { onThermalStatusChanged(status) }
+    }
 
     private val statsHandler = Handler(Looper.getMainLooper())
     private var statsUpdateCount = 0
@@ -205,6 +214,28 @@ class GameActivity : AppCompatActivity() {
             statsView.visibility = android.view.View.GONE
         }
 
+        thermalBanner = TextView(this).apply {
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            textSize = 13f
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0xCC8B0000.toInt())
+            setShadowLayer(2f, 1f, 1f, 0xFF000000.toInt())
+            gravity = Gravity.CENTER
+            visibility = android.view.View.GONE
+        }
+        val bannerParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.BOTTOM }
+        frame.addView(thermalBanner, bannerParams)
+
+        try {
+            pm.addThermalStatusListener(mainExecutor, thermalListener)
+            lastThermalStatus = pm.currentThermalStatus
+        } catch (e: Exception) {
+            Log.w("PolyDroid2", "thermal listener register failed: ${e.message}")
+        }
+
         imeCapture = ImeCaptureView(this)
         imeCapture.sendKey = { sc, kc, down -> nativeSendKeyEvent(sc, kc, down) }
         frame.addView(imeCapture, FrameLayout.LayoutParams(1, 1))
@@ -311,16 +342,21 @@ class GameActivity : AppCompatActivity() {
                 appendLog("Failed to connect LorieView to X server after 5s!")
             }
 
+            if (overheatDialogShown) {
+                appendLog("Skipped box64 launch due to overheating!")
+                return@thread
+            }
+
             appendLog("Launching Box64...")
             try {
                 Box64Launcher.launch(
                     this, tmpDir, fullArgs, renderWidth, renderHeight,
                     onLog = { line -> appendLog(line) },
                     onExit = { code ->
-                        if (code != 0 && !isFinishing) {
-                            runOnUiThread { showCrashDialog(code) }
-                        } else if (code == 0 && !isFinishing) {
-                            runOnUiThread { finishAndRemoveTask() }
+                        when {
+                            overheatDialogShown -> {}
+                            code != 0 && !isFinishing -> runOnUiThread { showCrashDialog(code) }
+                            code == 0 && !isFinishing -> runOnUiThread { finishAndRemoveTask() }
                         }
                     }
                 )
@@ -355,9 +391,21 @@ class GameActivity : AppCompatActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    override fun onResume() {
+        super.onResume()
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            onThermalStatusChanged(pm.currentThermalStatus)
+        } catch (_: Exception) {}
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         statsHandler.removeCallbacks(statsRunnable)
+        statsHandler.removeCallbacks(thermalBannerHideRunnable)
+        try {
+            (getSystemService(POWER_SERVICE) as PowerManager).removeThermalStatusListener(thermalListener)
+        } catch (_: Exception) {}
         if (isFinishing) {
             Box64Launcher.stop()
             AudioBridge.stop()
@@ -373,7 +421,7 @@ class GameActivity : AppCompatActivity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun showCrashDialog(exitCode: Int) {
-        if (crashDialogShown) return
+        if (crashDialogShown || overheatDialogShown) return
         crashDialogShown = true
 
         val pad = dp(24)
@@ -442,6 +490,117 @@ class GameActivity : AppCompatActivity() {
         }
 
         dialog.show()
+    }
+
+    private fun onThermalStatusChanged(status: Int) {
+        if (status >= PowerManager.THERMAL_STATUS_CRITICAL) {
+            showOverheatDialog()
+        } else if (status == PowerManager.THERMAL_STATUS_SEVERE
+                && lastThermalStatus < PowerManager.THERMAL_STATUS_SEVERE) {
+            showThermalBanner("Device hot, performance might drop!", 5000L)
+        }
+        lastThermalStatus = status
+    }
+
+    private fun showThermalBanner(msg: String, durationMs: Long) {
+        if (!::thermalBanner.isInitialized) return
+        thermalBanner.text = msg
+        thermalBanner.visibility = android.view.View.VISIBLE
+        statsHandler.removeCallbacks(thermalBannerHideRunnable)
+        statsHandler.postDelayed(thermalBannerHideRunnable, durationMs)
+    }
+
+    private fun showOverheatDialog() {
+        if (overheatDialogShown || crashDialogShown) return
+        overheatDialogShown = true
+        Box64Launcher.stop()
+
+        val pad = dp(24)
+        val danger = 0xFFB00020.toInt()
+        val dangerDim = 0xFF5A0010.toInt()
+
+        val iconSize = dp(40)
+        val icon = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.emergency_heat_24)?.apply {
+            setBounds(0, 0, iconSize, iconSize)
+            setTint(danger)
+        }
+
+        val titleView = TextView(this).apply {
+            text = "Device overheat!"
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_HeadlineSmall)
+            setTextColor(danger)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setCompoundDrawablesRelative(icon, null, null, null)
+            compoundDrawablePadding = dp(14)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad, dp(20), pad, dp(8))
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(8), pad, dp(20))
+        }
+
+        val msg = TextView(this).apply {
+            text = "Your device is too hot. Polytoria has exited in order to stop damage to device. Please cool down your device before playing."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+        }
+        content.addView(msg, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(16) })
+
+        val btnBgTints = android.content.res.ColorStateList(
+            arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+            intArrayOf(dangerDim, danger)
+        )
+        val btnTextTints = android.content.res.ColorStateList(
+            arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+            intArrayOf(0xFFDDDDDD.toInt(), 0xFFFFFFFF.toInt())
+        )
+
+        val websiteBtn = MaterialButton(this).apply {
+            text = "Back to website (4)"
+            isEnabled = false
+            backgroundTintList = btnBgTints
+            setTextColor(btnTextTints)
+        }
+        content.addView(websiteBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setCustomTitle(titleView)
+            .setView(content)
+            .setCancelable(false)
+            .create()
+
+        websiteBtn.setOnClickListener {
+            dialog.dismiss()
+            finishAndRemoveTask()
+        }
+
+        statsHandler.post {
+            if (!isFinishing && !isDestroyed) {
+                try { dialog.show() } catch (e: Exception) {
+                    Log.w("PolyDroid2", "Overheat dialog show failed: ${e.message}")
+                }
+            }
+        }
+
+        var seconds = 4
+        val ticker = object : Runnable {
+            override fun run() {
+                seconds--
+                if (seconds > 0) {
+                    websiteBtn.text = "Back to website ($seconds)"
+                    statsHandler.postDelayed(this, 1000)
+                } else {
+                    websiteBtn.text = "Back to website"
+                    websiteBtn.isEnabled = true
+                }
+            }
+        }
+        statsHandler.postDelayed(ticker, 1000)
     }
 
     private fun appendLog(msg: String) {
