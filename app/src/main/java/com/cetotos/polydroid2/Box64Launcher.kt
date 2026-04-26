@@ -172,12 +172,11 @@ object Box64Launcher {
             put("BOX64_DYNAREC_NATIVEFLAGS", "1")
             put("BOX64_DYNAREC_FORWARD", "512")
             put("BOX64_DYNAREC_PAUSE", "1")
-            put("BOX64_DYNAREC_DIRTY", "1")
+            put("BOX64_DYNAREC_DIRTY", "1")  // DIRTY 2 is slower by around 20-30 FPS, use 1 instead
             put("BOX64_DYNACACHE", "1")
             put("BOX64_MAXCPU", "4")
             put("BOX64_NORCFILES", "1")
             put("BOX64_ALLOWMISSINGLIBS", "1")
-            put("BOX64_FORCE_LD_PRELOAD", "1")
             put("BOX64_MMAP32", "0")
             put("BOX64_AVX", "2")
             // rootfs
