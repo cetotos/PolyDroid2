@@ -750,10 +750,14 @@ static PFN_vkResetCommandBuffer_t pfn_resetCmdBuf = NULL;
 typedef VkResult (VKAPI_PTR *PFN_vkCreateSemaphore_t)(VkDevice, const VkSemaphoreCreateInfo*, const VkAllocationCallbacks*, VkSemaphore*);
 typedef void (VKAPI_PTR *PFN_vkDestroySemaphore_t)(VkDevice, VkSemaphore, const VkAllocationCallbacks*);
 typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreFdKHR_t)(VkDevice, const VkSemaphoreGetFdInfoKHR*, int*);
+typedef VkResult (VKAPI_PTR *PFN_vkGetFenceFdKHR_t)(VkDevice, const VkFenceGetFdInfoKHR*, int*);
 static PFN_vkCreateSemaphore_t pfn_createSemaphore = NULL;
 static PFN_vkDestroySemaphore_t pfn_destroySemaphore = NULL;
 static PFN_vkGetSemaphoreFdKHR_t pfn_getSemaphoreFdKHR = NULL;
+static PFN_vkGetFenceFdKHR_t pfn_getFenceFdKHR = NULL;
 static VkSemaphore g_present_semaphores[16] = {0};
+static int g_present_fence_exportable = 0;
+static int g_present_fence_pending_export[SHIM_MAX_SWAPCHAIN_IMAGES] = {0};
 static VkPhysicalDevice g_physical_device = VK_NULL_HANDLE;
 static VkQueue g_queue = VK_NULL_HANDLE;
 
@@ -794,9 +798,11 @@ static void resolve_device_funcs(VkDevice device) {
     pfn_createSemaphore = (PFN_vkCreateSemaphore_t)gdpa(device, "vkCreateSemaphore");
     pfn_destroySemaphore = (PFN_vkDestroySemaphore_t)gdpa(device, "vkDestroySemaphore");
     pfn_getSemaphoreFdKHR = (PFN_vkGetSemaphoreFdKHR_t)gdpa(device, "vkGetSemaphoreFdKHR");
+    pfn_getFenceFdKHR = (PFN_vkGetFenceFdKHR_t)gdpa(device, "vkGetFenceFdKHR");
 
-    LOGI("Device funcs resolved: createImage=%p queueSubmit=%p cmdCopyImage=%p",
-         (void*)pfn_createImage, (void*)pfn_queueSubmit, (void*)pfn_cmdCopyImage);
+    LOGI("Device funcs resolved: createImage=%p queueSubmit=%p cmdCopyImage=%p sema_fd=%p fence_fd=%p",
+         (void*)pfn_createImage, (void*)pfn_queueSubmit, (void*)pfn_cmdCopyImage,
+         (void*)pfn_getSemaphoreFdKHR, (void*)pfn_getFenceFdKHR);
 }
 
 static uint32_t find_memory_type(uint32_t typeBits, VkMemoryPropertyFlags props) {
@@ -1473,16 +1479,35 @@ finish:
             pfn_destroyFence(device, g_present_fences[i], NULL);
             g_present_fences[i] = VK_NULL_HANDLE;
         }
+        g_present_fence_pending_export[i] = 0;
     }
+    g_present_fence_exportable = 0;
     if (pfn_createFence) {
+        int try_export = (pfn_getFenceFdKHR != NULL);
+        VkExportFenceCreateInfo exportInfo = {
+            .sType = VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO,
+            .pNext = NULL,
+            .handleTypes = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT,
+        };
         VkFenceCreateInfo fci = {
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = try_export ? &exportInfo : NULL,
             .flags = VK_FENCE_CREATE_SIGNALED_BIT,
         };
-        for (uint32_t i = 0; i < count; i++) {
-            pfn_createFence(device, &fci, NULL, &g_present_fences[i]);
+        VkResult fr = pfn_createFence(device, &fci, NULL, &g_present_fences[0]);
+        if (fr != VK_SUCCESS && try_export) {
+            LOGI("present fence export rejected (%d)", fr);
+            try_export = 0;
+            fci.pNext = NULL;
+            fr = pfn_createFence(device, &fci, NULL, &g_present_fences[0]);
         }
-        LOGI("Created %u present fences", count);
+        if (fr == VK_SUCCESS) {
+            for (uint32_t i = 1; i < count; i++) {
+                pfn_createFence(device, &fci, NULL, &g_present_fences[i]);
+            }
+        }
+        g_present_fence_exportable = try_export;
+        LOGI("Created %u present fences (exportable=%d)", count, g_present_fence_exportable);
     }
 
     for (uint32_t i = 0; i < 16; i++) {
@@ -1651,7 +1676,9 @@ static VkResult shim_vkQueuePresentKHR(
 
         VkFence presentFence = g_present_fences[imgIdx];
 
-        if (presentFence && pfn_waitForFences && pfn_resetFences) {
+        int prev_exported = g_present_fence_pending_export[imgIdx];
+        g_present_fence_pending_export[imgIdx] = 0;
+        if (presentFence && pfn_waitForFences && pfn_resetFences && !prev_exported) {
             pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
             pfn_resetFences(g_device, 1, &presentFence);
         }
@@ -1698,7 +1725,20 @@ static VkResult shim_vkQueuePresentKHR(
             }
         }
 
-        // fallback: if we cant hand surfaceflinger an async fence, block here
+        if (acquireFd < 0 && g_present_fence_exportable && presentFence && pfn_getFenceFdKHR) {
+            VkFenceGetFdInfoKHR fi = {
+                .sType = VK_STRUCTURE_TYPE_FENCE_GET_FD_INFO_KHR,
+                .pNext = NULL,
+                .fence = presentFence,
+                .handleType = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT,
+            };
+            int fd = -1;
+            if (pfn_getFenceFdKHR(g_device, &fi, &fd) == VK_SUCCESS && fd >= 0) {
+                acquireFd = fd;
+                g_present_fence_pending_export[imgIdx] = 1;
+            }
+        }
+
         if (acquireFd < 0 && g_using_system_driver && presentFence && pfn_waitForFences) {
             pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
         }
@@ -1774,7 +1814,7 @@ static VkResult shim_vkCreateDevice(
     if (!real_createDevice) return VK_ERROR_INITIALIZATION_FAILED;
 
     uint32_t count = pCreateInfo->enabledExtensionCount;
-    const char** newExts = (const char**)malloc(sizeof(char*) * (count + 8));
+    const char** newExts = (const char**)malloc(sizeof(char*) * (count + 10));
     uint32_t newCount = 0;
     int has_ahb_ext = 0;
     int has_ext_mem = 0;
@@ -1784,6 +1824,8 @@ static VkResult shim_vkCreateDevice(
     int has_image_format_list = 0;
     int has_dedicated_alloc = 0;
     int has_get_mem_req2 = 0;
+    int has_ext_fence = 0;
+    int has_ext_fence_fd = 0;
 
     for (uint32_t i = 0; i < count; i++) {
         const char* ext = pCreateInfo->ppEnabledExtensionNames[i];
@@ -1802,6 +1844,8 @@ static VkResult shim_vkCreateDevice(
         if (strcmp(ext, "VK_KHR_image_format_list") == 0) has_image_format_list = 1;
         if (strcmp(ext, "VK_KHR_dedicated_allocation") == 0) has_dedicated_alloc = 1;
         if (strcmp(ext, "VK_KHR_get_memory_requirements2") == 0) has_get_mem_req2 = 1;
+        if (strcmp(ext, "VK_KHR_external_fence") == 0) has_ext_fence = 1;
+        if (strcmp(ext, "VK_KHR_external_fence_fd") == 0) has_ext_fence_fd = 1;
         newExts[newCount++] = ext;
     }
 
@@ -1836,12 +1880,25 @@ static VkResult shim_vkCreateDevice(
         }
     }
 
+    uint32_t baseCount = newCount;
+    if (!has_ext_fence) {
+        newExts[newCount++] = "VK_KHR_external_fence";
+    }
+    if (!has_ext_fence_fd) {
+        newExts[newCount++] = "VK_KHR_external_fence_fd";
+    }
+
     VkDeviceCreateInfo modInfo = *pCreateInfo;
     modInfo.ppEnabledExtensionNames = newExts;
     modInfo.enabledExtensionCount = newCount;
 
     LOGI("vkCreateDevice with %u extensions (stripped %u)", newCount, count - newCount);
     VkResult result = real_createDevice(physicalDevice, &modInfo, pAllocator, pDevice);
+    if (result == VK_ERROR_EXTENSION_NOT_PRESENT && newCount > baseCount) {
+        LOGI("vkCreateDevice rejected fence-fd ext");
+        modInfo.enabledExtensionCount = baseCount;
+        result = real_createDevice(physicalDevice, &modInfo, pAllocator, pDevice);
+    }
     free(newExts);
 
     if (result == VK_SUCCESS) {
