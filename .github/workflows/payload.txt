@@ -1,0 +1,8 @@
+  {
+    "username": "GitHub",
+    "avatar_url": "https://github.githubassets.com/assets/GitHub-Mark-ea2971cee799.png",
+    "allowed_mentions": {
+      "roles": ["1495089945289953361"]
+    },
+    "content": "<@&1495089945289953361>\n# RELEASE_TITLE\n-# Released <t:UNIX_TIMESTAMP:R>\n\nRELEASE_BODY\n\n[**View on GitHub**](<RELEASE_URL>)"
+  }

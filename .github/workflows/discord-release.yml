@@ -1,0 +1,48 @@
+name: discord-release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send Discord release message
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          RELEASE_TITLE: ${{ github.event.release.name }}
+          VERSION: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          PUBLISHED_DATE: ${{ github.event.release.published_at }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+        run: |
+          python3 - <<'PY' | curl -fsS -H "Content-Type: application/json" -d @- "$WEBHOOK"
+          import json, os, re
+          from datetime import datetime
+
+          with open('.github/workflows/payload.txt') as f:
+              tmpl = f.read()
+
+          def esc(s):
+              return json.dumps(s or "")[1:-1]
+
+          ts = int(datetime.fromisoformat(
+              os.environ['PUBLISHED_DATE'].replace('Z', '+00:00')
+          ).timestamp())
+
+          repls = {
+              'RELEASE_TITLE':  esc(os.environ.get('RELEASE_TITLE') or os.environ['VERSION']),
+              'RELEASE_BODY':   esc(os.environ['RELEASE_BODY']),
+              'RELEASE_URL':    esc(os.environ['RELEASE_URL']),
+              'UNIX_TIMESTAMP': str(ts),
+          }
+          out = re.sub('|'.join(map(re.escape, repls)),
+                       lambda m: repls[m.group()],
+                       tmpl)
+
+          json.loads(out)
+          print(out, end='')
+          PY
