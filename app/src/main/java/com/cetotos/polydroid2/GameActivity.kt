@@ -493,10 +493,10 @@ class GameActivity : AppCompatActivity() {
     }
 
     private fun onThermalStatusChanged(status: Int) {
-        if (status >= PowerManager.THERMAL_STATUS_CRITICAL) {
+        if (status >= PowerManager.THERMAL_STATUS_EMERGENCY) {
             showOverheatDialog()
-        } else if (status == PowerManager.THERMAL_STATUS_SEVERE
-                && lastThermalStatus < PowerManager.THERMAL_STATUS_SEVERE) {
+        } else if (status == PowerManager.THERMAL_STATUS_CRITICAL
+                && lastThermalStatus < PowerManager.THERMAL_STATUS_CRITICAL) {
             showThermalBanner("Device hot, performance might drop!", 5000L)
         }
         lastThermalStatus = status
