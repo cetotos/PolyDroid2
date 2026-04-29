@@ -148,7 +148,7 @@ object Box64Launcher {
                 "librt.so.1")
 
             var ldPreload = ""
-            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$rootPath/usr/lib/x86_64-linux-gnu/libaudio_trace.so:$rootPath/usr/lib/x86_64-linux-gnu/libconnect_redirect.so:$ldPreload"
+            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$rootPath/usr/lib/x86_64-linux-gnu/libfmod_sched.so:$rootPath/usr/lib/x86_64-linux-gnu/libconnect_redirect.so:$ldPreload"
             put("BOX64_LD_PRELOAD", ldPreload.trimEnd(':'))
             put("BOX64_LOG", "1") // level 2 will give WAY too much do not use it the Player.log ends up being GIGABYTES big
             put("BOX64_SHOWSEGV", "1")
@@ -156,29 +156,31 @@ object Box64Launcher {
             put("BOX64_DLSYM_ERROR", "0")   // reduces log spam from missing symbols
             put("BOX64_CRASHHANDLER", "1")
             // optimizations
+            val safeMode = SettingsActivity.isSafeMode(ctx)
             put("BOX64_DYNAREC", "1")
-            put("BOX64_DYNAREC_BIGBLOCK", "2")
-            put("BOX64_DYNAREC_STRONGMEM", "0")
-            put("BOX64_DYNAREC_FASTNAN", "1")
-            put("BOX64_DYNAREC_FASTROUND", "1")
-            put("BOX64_DYNAREC_SAFEFLAGS", "0")
-            put("BOX64_DYNAREC_CALLRET", "1")
+            put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else "2")
+            put("BOX64_DYNAREC_STRONGMEM", if (safeMode) "1" else "0")
+            put("BOX64_DYNAREC_FASTNAN", if (safeMode) "0" else "1")
+            put("BOX64_DYNAREC_FASTROUND", if (safeMode) "0" else "1")
+            put("BOX64_DYNAREC_SAFEFLAGS", if (safeMode) "1" else "0")
+            put("BOX64_DYNAREC_CALLRET", if (safeMode) "0" else "1")
             put("BOX64_DYNAREC_SEP", "2")
             put("BOX64_DYNAREC_ALIGNED_ATOMICS", "1")
-            put("BOX64_DYNAREC_BLEEDING_EDGE", "1")
+            put("BOX64_DYNAREC_BLEEDING_EDGE", if (safeMode) "0" else "1")
             put("BOX64_DYNAREC_WAIT", "0")
             put("BOX64_DYNAREC_THP", "1")
-            put("BOX64_DYNAREC_HOTPAGE", "2")
-            put("BOX64_DYNAREC_NATIVEFLAGS", "1")
-            put("BOX64_DYNAREC_FORWARD", "512")
+            put("BOX64_DYNAREC_HOTPAGE", if (safeMode) "0" else "2")
+            put("BOX64_DYNAREC_NATIVEFLAGS", if (safeMode) "0" else "1")
+            put("BOX64_DYNAREC_FORWARD", if (safeMode) "0" else "512")
             put("BOX64_DYNAREC_PAUSE", "1")
-            put("BOX64_DYNAREC_DIRTY", "1")  // DIRTY 2 is slower by around 20-30 FPS, use 1 instead
-            put("BOX64_DYNACACHE", "1")
+            put("BOX64_DYNAREC_DIRTY", if (safeMode) "0" else "1")  // DIRTY 2 is slower by around 20-30 FPS, use 1 instead
+            put("BOX64_DYNACACHE", if (safeMode) "0" else "1")
             put("BOX64_MAXCPU", "4")
             put("BOX64_NORCFILES", "1")
             put("BOX64_ALLOWMISSINGLIBS", "1")
             put("BOX64_MMAP32", "0")
-            put("BOX64_AVX", "2")
+            put("BOX64_AVX", if (safeMode) "1" else "2")
+            if (safeMode) Log.i(TAG, "box64 Safe mode active!")
             // rootfs
             put("POLYDROID_ROOTDIR", rootPath)
             put("POLYDROID_NATIVE_DIR", nativeDir)

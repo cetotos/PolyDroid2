@@ -1,12 +1,3 @@
-/*
- * LD_PRELOAD shim: runs inside the guest x86_64 process via BOX64_LD_PRELOAD.
- *
- * Strips SCHED_FIFO realtime requests so FMOD's pthread_create succeeds —
- * without this, FMOD_System_Init returns FMOD_ERR_INTERNAL (33) and no audio
- * ever inits. Threads that originally asked for realtime get boosted to
- * URGENT_AUDIO priority (-16) via setpriority(), which non-root Android
- * processes are allowed to do for their own threads.
- */
 #define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>

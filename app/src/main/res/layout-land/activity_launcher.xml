@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/launcher_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="horizontal">
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_website"
+        android:layout_width="240dp"
+        android:layout_height="60dp"
+        android:text="Polytoria"
+        app:icon="@mipmap/ic_polytoria_foreground"
+        app:iconGravity="textStart"
+        app:iconSize="25dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_settings"
+        style="@style/Widget.Material3.Button.TonalButton"
+        android:layout_width="240dp"
+        android:layout_height="60dp"
+        android:layout_marginStart="16dp"
+        android:text="Settings"
+        app:icon="@drawable/ic_settings"
+        app:iconGravity="textStart" />
+
+</LinearLayout>

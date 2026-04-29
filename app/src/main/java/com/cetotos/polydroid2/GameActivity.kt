@@ -179,7 +179,6 @@ class GameActivity : AppCompatActivity() {
             sendInput = { type, button, x, y -> nativeSendInputEvent(type, button, x, y) },
             sendKey = { scanCode, keyCode, down -> nativeSendKeyEvent(scanCode, keyCode, down) },
             cameraSensitivity = SettingsActivity.getCameraSensitivity(this),
-            newZoom = SettingsActivity.getNewZoom(this),
         )
         frame.addView(touchOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -367,12 +366,6 @@ class GameActivity : AppCompatActivity() {
         }
     }
 
-    private var dispatchTouchLogCount = 0
-    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        val result = super.dispatchTouchEvent(ev)
-        return result
-    }
-
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
         val scanCode = event.scanCode
@@ -397,6 +390,13 @@ class GameActivity : AppCompatActivity() {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             onThermalStatusChanged(pm.currentThermalStatus)
         } catch (_: Exception) {}
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (!isFinishing && SettingsActivity.isPipEnabled(this)) {
+            enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().build())
+        }
     }
 
     override fun onDestroy() {

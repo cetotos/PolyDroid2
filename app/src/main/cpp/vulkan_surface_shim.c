@@ -721,6 +721,7 @@ typedef VkResult (*PFN_vkCreateFence_t)(VkDevice, const VkFenceCreateInfo*, cons
 typedef void (*PFN_vkDestroyFence_t)(VkDevice, VkFence, const VkAllocationCallbacks*);
 typedef VkResult (*PFN_vkWaitForFences_t)(VkDevice, uint32_t, const VkFence*, VkBool32, uint64_t);
 typedef VkResult (*PFN_vkResetFences_t)(VkDevice, uint32_t, const VkFence*);
+typedef VkResult (*PFN_vkGetFenceStatus_t)(VkDevice, VkFence);
 typedef VkResult (*PFN_vkResetCommandBuffer_t)(VkCommandBuffer, VkCommandBufferResetFlags);
 
 static PFN_vkCreateImage pfn_createImage = NULL;
@@ -746,6 +747,7 @@ static PFN_vkCreateFence_t pfn_createFence = NULL;
 static PFN_vkDestroyFence_t pfn_destroyFence = NULL;
 static PFN_vkWaitForFences_t pfn_waitForFences = NULL;
 static PFN_vkResetFences_t pfn_resetFences = NULL;
+static PFN_vkGetFenceStatus_t pfn_getFenceStatus = NULL;
 static PFN_vkResetCommandBuffer_t pfn_resetCmdBuf = NULL;
 typedef VkResult (VKAPI_PTR *PFN_vkCreateSemaphore_t)(VkDevice, const VkSemaphoreCreateInfo*, const VkAllocationCallbacks*, VkSemaphore*);
 typedef void (VKAPI_PTR *PFN_vkDestroySemaphore_t)(VkDevice, VkSemaphore, const VkAllocationCallbacks*);
@@ -794,6 +796,7 @@ static void resolve_device_funcs(VkDevice device) {
     pfn_destroyFence = (PFN_vkDestroyFence_t)gdpa(device, "vkDestroyFence");
     pfn_waitForFences = (PFN_vkWaitForFences_t)gdpa(device, "vkWaitForFences");
     pfn_resetFences = (PFN_vkResetFences_t)gdpa(device, "vkResetFences");
+    pfn_getFenceStatus = (PFN_vkGetFenceStatus_t)gdpa(device, "vkGetFenceStatus");
     pfn_resetCmdBuf = (PFN_vkResetCommandBuffer_t)gdpa(device, "vkResetCommandBuffer");
     pfn_createSemaphore = (PFN_vkCreateSemaphore_t)gdpa(device, "vkCreateSemaphore");
     pfn_destroySemaphore = (PFN_vkDestroySemaphore_t)gdpa(device, "vkDestroySemaphore");
@@ -1679,7 +1682,10 @@ static VkResult shim_vkQueuePresentKHR(
         int prev_exported = g_present_fence_pending_export[imgIdx];
         g_present_fence_pending_export[imgIdx] = 0;
         if (presentFence && pfn_waitForFences && pfn_resetFences && !prev_exported) {
-            pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
+            if (!pfn_getFenceStatus ||
+                pfn_getFenceStatus(g_device, presentFence) != VK_SUCCESS) {
+                pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
+            }
             pfn_resetFences(g_device, 1, &presentFence);
         }
 

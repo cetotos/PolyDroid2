@@ -53,7 +53,6 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_CUSTOM_WIDTH = "custom_width"
         const val KEY_CUSTOM_HEIGHT = "custom_height"
         const val KEY_CAMERA_SENSITIVITY = "camera_sensitivity"
-        const val KEY_NEW_ZOOM = "new_zoom"
         const val KEY_SHOW_STATS = "show_stats"
         const val KEY_FULLSCREEN = "fullscreen"
         const val KEY_VULKAN_DRIVER = "vulkan_driver"
@@ -76,6 +75,18 @@ class SettingsActivity : AppCompatActivity() {
         const val DEFAULT_POLY_PRESET = "Low"
         const val KEY_LAST_LOG_SEND = "last_log_send_time"
         const val LOG_SEND_COOLDOWN = 180 * 1000L
+        const val KEY_SAFE_MODE = "safe_mode"
+        const val KEY_PIP = "pip_enabled"
+        const val KEY_HAPTIC = "haptic_enabled"
+
+        fun isSafeMode(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_SAFE_MODE, false)
+
+        fun isPipEnabled(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_PIP, true)
+
+        fun isHapticEnabled(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_HAPTIC, true)
         const val DEFAULT_RESOLUTION = 720
         const val DEFAULT_SENSITIVITY = 3f
 
@@ -188,11 +199,6 @@ class SettingsActivity : AppCompatActivity() {
             }
             ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                 .putString(KEY_CUSTOM_KEYS, arr.toString()).apply()
-        }
-
-        fun getNewZoom(ctx: Context): Boolean {
-            return ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_NEW_ZOOM, false)
         }
 
         fun getCameraSensitivity(ctx: Context): Float {
@@ -523,10 +529,16 @@ class SettingsActivity : AppCompatActivity() {
         ).apply { if (!first) topMargin = dp(12) }
     }
 
+    private fun tabSidePadding(): Int {
+        val widthDp = resources.configuration.screenWidthDp
+        val maxContentDp = 640
+        return if (widthDp > maxContentDp) dp((widthDp - maxContentDp) / 2) else dp(16)
+    }
+
     private fun buildGraphicsTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
+            setPadding(tabSidePadding(), dp(16), tabSidePadding(), dp(24))
         }
 
         val (displayCard, display) = section("Display")
@@ -632,6 +644,22 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         display.addView(fullscreenSwitch, layoutParams().apply { topMargin = dp(16) })
+
+        val pipSwitch = MaterialSwitch(this).apply {
+            text = "Picture-in-Picture"
+            isChecked = prefs.getBoolean(KEY_PIP, true)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_PIP, checked).apply()
+            }
+        }
+        display.addView(pipSwitch, layoutParams().apply { topMargin = dp(16) })
+
+        val pipHint = TextView(this).apply {
+            text = "PiP runs the game in a seperate window allowing you to use other apps while the client stays running."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
+        }
+        display.addView(pipHint, layoutParams().apply { topMargin = dp(4) })
 
         content.addView(displayCard, cardParams(first = true))
 
@@ -747,7 +775,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun buildControlsTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
+            setPadding(tabSidePadding(), dp(16), tabSidePadding(), dp(24))
         }
 
         val (cameraCard, camera) = section("Camera")
@@ -770,14 +798,14 @@ class SettingsActivity : AppCompatActivity() {
         }
         camera.addView(sensitivitySlider, layoutParams())
 
-        val newZoomSwitch = MaterialSwitch(this).apply {
-            text = "Experimental zoom"
-            isChecked = prefs.getBoolean(KEY_NEW_ZOOM, false)
+        val hapticSwitch = MaterialSwitch(this).apply {
+            text = "Haptic feedback"
+            isChecked = prefs.getBoolean(KEY_HAPTIC, true)
             setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean(KEY_NEW_ZOOM, checked).apply()
+                prefs.edit().putBoolean(KEY_HAPTIC, checked).apply()
             }
         }
-        camera.addView(newZoomSwitch, layoutParams().apply { topMargin = dp(16) })
+        camera.addView(hapticSwitch, layoutParams().apply { topMargin = dp(16) })
 
         content.addView(cameraCard, cardParams(first = true))
 
@@ -965,17 +993,48 @@ class SettingsActivity : AppCompatActivity() {
     private fun buildOtherTab(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
+            setPadding(tabSidePadding(), dp(16), tabSidePadding(), dp(24))
         }
 
-        val (diagCard, diag) = section("Diagnostics")
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
-        val diagHint = TextView(this).apply {
-            text = "Send your recent app and Unity logs to the developer to help fix bugs. No personal info is included."
+        val (updCard, upd) = section("Updates")
+
+        val versionLabel = TextView(this).apply {
+            text = "Current version: ${currentVersionName()}"
             setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
             setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
         }
-        diag.addView(diagHint, layoutParams().apply { bottomMargin = dp(12) })
+        upd.addView(versionLabel, layoutParams().apply { bottomMargin = dp(12) })
+
+        val checkBtn = MaterialButton(this).apply {
+            text = "Check for updates"
+            setOnClickListener { checkForUpdates(this) }
+        }
+        upd.addView(checkBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        content.addView(updCard, cardParams(first = true))
+
+        val (diagCard, diag) = section("Debug")
+
+        val safeSwitch = MaterialSwitch(this).apply {
+            text = "Safe mode"
+            isChecked = prefs.getBoolean(KEY_SAFE_MODE, false)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_SAFE_MODE, checked).apply()
+            }
+        }
+        diag.addView(safeSwitch, layoutParams())
+
+        val safeHint = TextView(this).apply {
+            text = "Safe mode disables certain box64 optimizations and might be slower. Only use if you frequently experience crashes!"
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
+        }
+        diag.addView(safeHint, layoutParams().apply { topMargin = dp(4); bottomMargin = dp(20) })
 
         val sendLogsButton = MaterialButton(this).apply {
             text = "Send app logs"
@@ -993,12 +1052,59 @@ class SettingsActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        content.addView(diagCard, cardParams(first = true))
+        val diagHint = TextView(this).apply {
+            text = "Send your recent app and Unity logs to the developer to help fix bugs. No personal info is included."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, 0))
+        }
+        diag.addView(diagHint, layoutParams().apply { topMargin = dp(4) })
+
+        content.addView(diagCard, cardParams())
 
         return ScrollView(this).apply {
             isFillViewport = true
             addView(content)
         }
+    }
+
+    private fun checkForUpdates(button: MaterialButton) {
+        button.isEnabled = false
+        button.text = "Checking..."
+        val current = currentVersionName()
+        UpdateCheck.checkAsync(current) { result ->
+            runOnUiThread {
+                button.isEnabled = true
+                button.text = "Check for updates"
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                when {
+                    result == null -> Toast.makeText(this, "Update check failed", Toast.LENGTH_SHORT).show()
+                    result.outdated -> showUpdateDialog(current, result.latestTag, result.htmlUrl)
+                    else -> Toast.makeText(this, "You're up to date! ($current)", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun showUpdateDialog(current: String, latestTag: String, url: String) {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Update available")
+            .setMessage("A newer version ($latestTag) is available.\nCurrently on $current.")
+            .setPositiveButton("Update") { _, _ ->
+                try {
+                    startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                } catch (e: Exception) {
+                    Log.e("PolyDroid2", "no browser to open update URL", e)
+                }
+            }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    private fun currentVersionName(): String = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "0"
+    } catch (_: Exception) {
+        "0"
     }
 
     private fun sendLogs(button: MaterialButton) {

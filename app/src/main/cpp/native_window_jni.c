@@ -336,9 +336,7 @@ static void* compositor_thread(void* arg) {
                 .height = height,
                 .layers = 1,
                 .format = format,
-                .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
-                         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-                         AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY,
+                .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
                 .stride = 0,
                 .rfu0 = 0,
                 .rfu1 = 0,
@@ -441,22 +439,60 @@ static void* compositor_thread(void* arg) {
 
         while (1) {
             uint32_t msg[2];
-            struct iovec iov = { .iov_base = msg, .iov_len = sizeof(msg) };
-            char cmsgBuf[CMSG_SPACE(sizeof(int))];
-            struct msghdr mh;
-            memset(&mh, 0, sizeof(mh));
-            mh.msg_iov = &iov;
-            mh.msg_iovlen = 1;
-            mh.msg_control = cmsgBuf;
-            mh.msg_controllen = sizeof(cmsgBuf);
-            n = recvmsg(client_fd, &mh, MSG_WAITALL);
-            if (n != (ssize_t)sizeof(msg)) break;
-
             int acquire_fd = -1;
-            for (struct cmsghdr *c = CMSG_FIRSTHDR(&mh); c != NULL; c = CMSG_NXTHDR(&mh, c)) {
-                if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
-                    memcpy(&acquire_fd, CMSG_DATA(c), sizeof(int));
+            int dropped = 0;
+            int connection_dead = 0;
+            {
+                struct iovec iov = { .iov_base = msg, .iov_len = sizeof(msg) };
+                char cmsgBuf[CMSG_SPACE(sizeof(int))];
+                struct msghdr mh;
+                memset(&mh, 0, sizeof(mh));
+                mh.msg_iov = &iov;
+                mh.msg_iovlen = 1;
+                mh.msg_control = cmsgBuf;
+                mh.msg_controllen = sizeof(cmsgBuf);
+                n = recvmsg(client_fd, &mh, MSG_WAITALL);
+                if (n != (ssize_t)sizeof(msg)) break;
+                for (struct cmsghdr *c = CMSG_FIRSTHDR(&mh); c != NULL; c = CMSG_NXTHDR(&mh, c)) {
+                    if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
+                        memcpy(&acquire_fd, CMSG_DATA(c), sizeof(int));
+                    }
                 }
+            }
+
+            for (;;) {
+                uint32_t newer[2];
+                int newer_fd = -1;
+                struct iovec iov2 = { .iov_base = newer, .iov_len = sizeof(newer) };
+                char cmsgBuf2[CMSG_SPACE(sizeof(int))];
+                struct msghdr mh2;
+                memset(&mh2, 0, sizeof(mh2));
+                mh2.msg_iov = &iov2;
+                mh2.msg_iovlen = 1;
+                mh2.msg_control = cmsgBuf2;
+                mh2.msg_controllen = sizeof(cmsgBuf2);
+                ssize_t nn = recvmsg(client_fd, &mh2, MSG_DONTWAIT);
+                if (nn == (ssize_t)sizeof(newer)) {
+                    for (struct cmsghdr *c = CMSG_FIRSTHDR(&mh2); c != NULL; c = CMSG_NXTHDR(&mh2, c)) {
+                        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
+                            memcpy(&newer_fd, CMSG_DATA(c), sizeof(int));
+                        }
+                    }
+                    if (acquire_fd >= 0) close(acquire_fd);
+                    msg[0] = newer[0];
+                    msg[1] = newer[1];
+                    acquire_fd = newer_fd;
+                    dropped++;
+                    continue;
+                }
+                if (nn == 0) { connection_dead = 1; break; }
+                if (nn < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+                connection_dead = 1;
+                break;
+            }
+            if (connection_dead) {
+                if (acquire_fd >= 0) close(acquire_fd);
+                break;
             }
 
             uint32_t img_idx = msg[0];
@@ -502,10 +538,13 @@ static void* compositor_thread(void* arg) {
                 fps_start = now;
             }
 
+            static int s_total_dropped = 0;
+            s_total_dropped += dropped;
             if (frame_count == 1) {
                 LOGI("compositor: first frame presented (idx=%u)", img_idx);
             } else if (frame_count % 3000 == 0) {
-                LOGI("compositor: %d frames presented", frame_count);
+                LOGI("compositor: %d frames presented (%d coalesced)",
+                     frame_count, s_total_dropped);
             }
         }
 

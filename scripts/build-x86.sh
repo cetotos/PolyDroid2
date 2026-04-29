@@ -22,7 +22,7 @@ build() {
 build dbus_stub.c             "$GLIBC_OUT/libdbus-1.so.3"         libdbus-1.so.3
 build pulse_stub.c             "$GLIBC_OUT/libpulse.so.0"          libpulse.so.0
 build pulse_simple_stub.c      "$GLIBC_OUT/libpulse-simple.so.0"   libpulse-simple.so.0
-build audio_trace_shim.c       "$GLIBC_OUT/libaudio_trace.so"
+build fmod_sched_shim.c        "$GLIBC_OUT/libfmod_sched.so"
 build connect_redirect_shim.c  "$GLIBC_OUT/libconnect_redirect.so"
 
 build libX11_stub.c            "$X86_OUT/libX11_stub.so"

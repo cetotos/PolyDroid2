@@ -76,9 +76,48 @@ class LauncherActivity : AppCompatActivity() {
                         detailBar.progress = detailPct
                     }
                 }
-                runOnUiThread { dialog.dismiss() }
+                runOnUiThread {
+                    dialog.dismiss()
+                    kickoffUpdateCheck()
+                }
+            }
+        } else {
+            kickoffUpdateCheck()
+        }
+    }
+
+    private fun kickoffUpdateCheck() {
+        val current = currentVersionName()
+        UpdateCheck.checkAsync(current) { result ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (result != null && result.outdated) {
+                    showUpdateDialog(current, result.latestTag, result.htmlUrl)
+                }
             }
         }
+    }
+
+    private fun showUpdateDialog(current: String, latestTag: String, url: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Update available")
+            .setMessage("A newer version ($latestTag) is available.\nCurrently on $current.")
+            .setPositiveButton("Update") { _, _ ->
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (e: Exception) {
+                    Log.e(TAG, "no browser to open update URL", e)
+                }
+            }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    private fun currentVersionName(): String = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "0"
+    } catch (_: Exception) {
+        "0"
     }
 
     private fun Int.dpToPx(): Int =

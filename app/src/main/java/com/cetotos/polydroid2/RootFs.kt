@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 object RootFs {
     private const val TAG = "PolyDroid2"
     private const val VERSION = 7
-    private const val LIBS_VERSION = 6
+    private const val LIBS_VERSION = 7
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",
@@ -34,7 +34,7 @@ object RootFs {
         "glibc-x86_64/libpulse.so.0",
         "glibc-x86_64/libpulse-simple.so.0",
         "glibc-x86_64/libdbus-1.so.3",
-        "glibc-x86_64/libaudio_trace.so",
+        "glibc-x86_64/libfmod_sched.so",
         "glibc-x86_64/libconnect_redirect.so",
         "glibc-x86_64/libtimer_shim.so",
         "libudev_stub.so",
@@ -102,14 +102,17 @@ object RootFs {
         private var lastPct = -1
         private var bytesSinceEmit = 0L
 
+        @Synchronized
         fun start() {
             if (stages.isNotEmpty()) emit(force = true)
         }
+        @Synchronized
         fun addBytes(n: Long) {
             bytesInStage += n
             bytesSinceEmit += n
             if (bytesSinceEmit >= 65536) emit(force = false)
         }
+        @Synchronized
         fun completeStage() {
             idx++
             bytesInStage = 0L
@@ -136,8 +139,9 @@ object RootFs {
 
         val stages = mutableListOf<Stage>()
         if (needRootfs) {
-            stages.add(Stage("Extracting rootfs...", assetLen(ctx, "rootfs.tar.xz")))
-            stages.add(Stage("Extracting Polytoria client...", assetLen(ctx, "polytoria_client.txz")))
+            val rootfsBytes = assetLen(ctx, "rootfs.tar.xz")
+            val polyBytes = assetLen(ctx, "polytoria_client.txz")
+            stages.add(Stage("Extracting rootfs and client...", rootfsBytes + polyBytes))
         }
         if (needLibs) {
             stages.add(Stage("Extracting libraries...", LIB_ASSETS.sumOf { assetLen(ctx, it) }))
@@ -147,9 +151,23 @@ object RootFs {
         progress.start()
 
         if (needRootfs) {
+            val root = rootDir(ctx)
+            if (root.exists()) root.deleteRecursively()
+            root.mkdirs()
+
+            val polyError = arrayOfNulls<Throwable>(1)
+            val polyThread = Thread({
+                try {
+                    extractPolytoria(ctx, progress)
+                } catch (t: Throwable) {
+                    polyError[0] = t
+                }
+            }, "PolyExtract").apply { start() }
+
             install(ctx, progress)
-            progress.completeStage()
-            extractPolytoria(ctx, progress)
+            polyThread.join()
+            polyError[0]?.let { throw it }
+
             progress.completeStage()
         }
         if (needLibs) {
@@ -160,7 +178,6 @@ object RootFs {
 
     private fun install(ctx: Context, progress: Progress) {
         val root = rootDir(ctx)
-        if (root.exists()) root.deleteRecursively()
         root.mkdirs()
 
         Log.i(TAG, "Extracting rootfs...")
@@ -384,7 +401,7 @@ object RootFs {
             "libxkbcommon.so.0",
             "libpulse.so.0", "libpulse-simple.so.0",
             "libdbus-1.so.3",
-            "libaudio_trace.so",
+            "libfmod_sched.so",
             "libconnect_redirect.so",
             "libtimer_shim.so"
         )
@@ -398,9 +415,7 @@ object RootFs {
                 Log.w(TAG, "glibc asset $lib not found: ${e.message}")
             }
         }
-        for (stale in listOf("libbsd.so.0", "libbsd.so", "libmd.so.0", "libmd.so")) {
-            File(x86LibDir, stale).delete()
-        }
+        File(x86LibDir, "libaudio_trace.so").delete()
         Log.i(TAG, "Deployed x86_64 glibc libs: ${glibcLibs.size} files")
 
         try {
@@ -426,10 +441,6 @@ object RootFs {
         } catch (e: Exception) {
             Log.w(TAG, "ALSA stub deploy failed: ${e.message}")
         }
-
-        File(x86LibDir, "libglibc_shim.so").delete()
-        File(x86LibDir, "libxmissing_stub.so").delete()
-        File(x86LibDir, "x11_glx_inject.so").delete()
 
         try {
             val dest = File(x86LibDir, "libdns_resolver.so")

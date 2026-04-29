@@ -24,6 +24,9 @@ class ImeCaptureView @JvmOverloads constructor(
 
     private var internalChange = false
     var sendKey: ((scanCode: Int, keyCode: Int, down: Boolean) -> Unit)? = null
+    private val kbExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "polykbd").apply { isDaemon = true }
+    }
 
     init {
         isFocusable = true
@@ -107,8 +110,11 @@ class ImeCaptureView @JvmOverloads constructor(
         val cb = sendKey ?: return
         val kcm = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
         val events = kcm.getEvents(charArrayOf(c)) ?: return
-        for (e in events) {
-            cb(e.scanCode, e.keyCode, e.action == KeyEvent.ACTION_DOWN)
+        kbExecutor.execute {
+            for (e in events) {
+                cb(e.scanCode, e.keyCode, e.action == KeyEvent.ACTION_DOWN)
+                try { Thread.sleep(25) } catch (_: InterruptedException) {}
+            }
         }
     }
 

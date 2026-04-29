@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.graphics.RectF
@@ -21,7 +22,6 @@ class TouchControlOverlay(
     private val sendInput: (type: Int, button: Int, x: Int, y: Int) -> Unit,
     private val sendKey: (scanCode: Int, keyCode: Int, down: Boolean) -> Unit,
     private val cameraSensitivity: Float = 3f,
-    private val newZoom: Boolean = false,
 ) : View(context) {
 
     companion object {
@@ -128,7 +128,7 @@ class TouchControlOverlay(
     private var pinchPointer2Id = -1
     private var pinchLastDist = 0f
     private var pinchAccum = 0f
-    private val pinchStepPx = (if (newZoom) 22f else 40f) * density
+    private val pinchStepPx = 40f * density
     private var pinchLastCenterY = 0f
     private var scrollAccum = 0f
     private val scrollStepPx = 8f * density
@@ -259,6 +259,14 @@ class TouchControlOverlay(
         return null
     }
 
+    private fun pressHaptic() {
+        if (!SettingsActivity.isHapticEnabled(context)) return
+        performHapticFeedback(
+            HapticFeedbackConstants.KEYBOARD_TAP,
+            HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+        )
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -272,6 +280,7 @@ class TouchControlOverlay(
                 if (djump <= jumpRadius * 1.5f && jumpPointerId == -1) {
                     jumpPointerId = pid
                     sendKey(SCAN_SPACE, 0, true)
+                    pressHaptic()
                     invalidate()
                     return true
                 }
@@ -281,6 +290,7 @@ class TouchControlOverlay(
                     if (itemBarActiveCell[cellIdx] == -1) {
                         itemBarActiveCell[cellIdx] = pid
                         sendKey(ITEMBAR_SCANS[cellIdx], 0, true)
+                        pressHaptic()
                         invalidate()
                     }
                     return true
@@ -296,6 +306,7 @@ class TouchControlOverlay(
                         kb.pointerId = pid
                         sendKey(kb.scanCode, 0, true)
                     }
+                    pressHaptic()
                     invalidate()
                     return true
                 }
@@ -308,6 +319,7 @@ class TouchControlOverlay(
                     joystickKnobX = joystickCenterX
                     joystickKnobY = joystickCenterY
                     joystickActive = true
+                    pressHaptic()
                     invalidate()
                 } else if (!inJoystick && jumpPointerId != pid) {
                     if (cameraPointerId == -1 && pinchPointer1Id == -1) {
@@ -319,6 +331,7 @@ class TouchControlOverlay(
                         cameraStartTime = System.currentTimeMillis()
                         cameraDragging = false
                         cameraMoved = false
+                        sendInput(INPUT_MOTION, 0, renderWidth / 2, renderHeight / 2)
                     } else if (pinchPointer1Id == -1 && cameraPointerId != -1 && cameraPointerId != pid) {
                         val otherIdx = event.findPointerIndex(cameraPointerId)
                         if (otherIdx >= 0) {

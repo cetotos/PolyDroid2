@@ -77,9 +77,13 @@ class PolytoriaSettingsActivity : AppCompatActivity() {
             setNavigationOnClickListener { finish() }
         }
 
+        val sidePad = run {
+            val widthDp = resources.configuration.screenWidthDp
+            if (widthDp > 640) dp((widthDp - 640) / 2) else dp(16)
+        }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
+            setPadding(sidePad, dp(16), sidePad, dp(24))
         }
 
         content.addView(buildPresetCard(), cardParams(first = true))
