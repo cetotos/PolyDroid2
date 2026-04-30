@@ -20,6 +20,9 @@ class LauncherActivity : AppCompatActivity() {
         private const val POLYTORIA_URL = "https://polytoria.com/home"
     }
 
+    private var extractionInProgress = false
+    private var updateDialogShowing = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_launcher)
@@ -45,6 +48,7 @@ class LauncherActivity : AppCompatActivity() {
         }
 
         if (RootFs.needsExtraction(this)) {
+            extractionInProgress = true
             val detailBar = ProgressBar(
                 this, null, android.R.attr.progressBarStyleHorizontal
             ).apply {
@@ -78,15 +82,20 @@ class LauncherActivity : AppCompatActivity() {
                 }
                 runOnUiThread {
                     dialog.dismiss()
+                    extractionInProgress = false
                     kickoffUpdateCheck()
                 }
             }
-        } else {
-            kickoffUpdateCheck()
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!extractionInProgress) kickoffUpdateCheck()
+    }
+
     private fun kickoffUpdateCheck() {
+        if (updateDialogShowing) return
         val current = currentVersionName()
         UpdateCheck.checkAsync(current) { result ->
             runOnUiThread {
@@ -99,6 +108,7 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun showUpdateDialog(current: String, latestTag: String, url: String) {
+        updateDialogShowing = true
         MaterialAlertDialogBuilder(this)
             .setTitle("Update available")
             .setMessage("A newer version ($latestTag) is available.\nCurrently on $current.")
@@ -110,6 +120,7 @@ class LauncherActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton("Later", null)
+            .setOnDismissListener { updateDialogShowing = false }
             .show()
     }
 
