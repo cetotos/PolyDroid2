@@ -419,6 +419,7 @@ static VkResult shim_vkCreateInstance(
         LOGI("  ext[%u]: %s", newCount, ext);
         newExts[newCount++] = ext;
     }
+    uint32_t baseCount = newCount;
     if (wants_x11_surface && !has_surface) {
         newExts[newCount++] = "VK_KHR_surface";
         LOGI("injecting VK_KHR_surface");
@@ -434,6 +435,11 @@ static VkResult shim_vkCreateInstance(
 
     LOGI("Creating Vulkan instance with %u extensions", newCount);
     VkResult result = real_vkCreateInstance(&modifiedInfo, pAllocator, pInstance);
+    if (result == VK_ERROR_EXTENSION_NOT_PRESENT && newCount > baseCount) {
+        LOGI("vkCreateInstance rejected injected exts! retrying without them");
+        modifiedInfo.enabledExtensionCount = baseCount;
+        result = real_vkCreateInstance(&modifiedInfo, pAllocator, pInstance);
+    }
     free(newExts);
 
     if (result == VK_SUCCESS && *pInstance) {
