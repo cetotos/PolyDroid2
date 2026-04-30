@@ -574,6 +574,7 @@ static void parse_and_queue(const unsigned char *wire) {
 static unsigned char s_rbuf[8192];
 static int s_rbuf_len = 0;
 static int s_input_sock = -1;
+static int s_shift_held = 0;
 static void input_sock_init(void);
 static void drain_input_socket(void);
 static int s_pending_calls = 0;
@@ -702,9 +703,14 @@ static void drain_input_socket(void) {
             *(unsigned int*)(p+84) = (unsigned int)msg.button;
             eq_push(&ev);
         } else if (msg.type == 4 || msg.type == 5) {
+            unsigned int keycode = (unsigned int)msg.x;
             *(int*)(p) = (msg.type == 4) ? 2 : 3;
-            *(unsigned int*)(p+84) = (unsigned int)msg.x;
+            *(unsigned int*)(p+80) = s_shift_held ? 0x01 : 0x00;
+            *(unsigned int*)(p+84) = keycode;
             eq_push(&ev);
+            if (keycode == 50 || keycode == 62) {
+                s_shift_held = (msg.type == 4) ? 1 : 0;
+            }
         }
     }
 }
@@ -764,9 +770,42 @@ static KeySym s_keycode_to_keysym[256] = {
     [134] = 0xffec, /* Super_R */
 };
 
+static KeySym s_keycode_to_keysym_shifted[256] = {
+    [ 10] = 0x0021, /* ! */  [ 11] = 0x0040, /* @ */  [ 12] = 0x0023, /* # */
+    [ 13] = 0x0024, /* $ */  [ 14] = 0x0025, /* % */  [ 15] = 0x005e, /* ^ */
+    [ 16] = 0x0026, /* & */  [ 17] = 0x002a, /* * */  [ 18] = 0x0028, /* ( */
+    [ 19] = 0x0029, /* ) */
+    [ 20] = 0x005f, /* _ */  [ 21] = 0x002b, /* + */
+    [ 24] = 0x0051, /* Q */  [ 25] = 0x0057, /* W */  [ 26] = 0x0045, /* E */
+    [ 27] = 0x0052, /* R */  [ 28] = 0x0054, /* T */  [ 29] = 0x0059, /* Y */
+    [ 30] = 0x0055, /* U */  [ 31] = 0x0049, /* I */  [ 32] = 0x004f, /* O */
+    [ 33] = 0x0050, /* P */
+    [ 34] = 0x007b, /* { */  [ 35] = 0x007d, /* } */
+    [ 38] = 0x0041, /* A */  [ 39] = 0x0053, /* S */  [ 40] = 0x0044, /* D */
+    [ 41] = 0x0046, /* F */  [ 42] = 0x0047, /* G */  [ 43] = 0x0048, /* H */
+    [ 44] = 0x004a, /* J */  [ 45] = 0x004b, /* K */  [ 46] = 0x004c, /* L */
+    [ 47] = 0x003a, /* : */  [ 48] = 0x0022, /* " */
+    [ 49] = 0x007e, /* ~ */
+    [ 51] = 0x007c, /* | */
+    [ 52] = 0x005a, /* Z */  [ 53] = 0x0058, /* X */  [ 54] = 0x0043, /* C */
+    [ 55] = 0x0056, /* V */  [ 56] = 0x0042, /* B */  [ 57] = 0x004e, /* N */
+    [ 58] = 0x004d, /* M */
+    [ 59] = 0x003c, /* < */  [ 60] = 0x003e, /* > */
+    [ 61] = 0x003f, /* ? */
+};
+
 static KeySym keycode_to_keysym(unsigned int keycode) {
-    if (keycode < 256) return s_keycode_to_keysym[keycode];
-    return 0;
+    if (keycode >= 256) return 0;
+    return s_keycode_to_keysym[keycode];
+}
+
+static KeySym keycode_to_keysym_with_state(unsigned int keycode, unsigned int state) {
+    if (keycode >= 256) return 0;
+    if (state & 0x01) {
+        KeySym shifted = s_keycode_to_keysym_shifted[keycode];
+        if (shifted) return shifted;
+    }
+    return s_keycode_to_keysym[keycode];
 }
 
 XSizeHints* XAllocSizeHints(void) {
@@ -1075,14 +1114,17 @@ XFontStruct* XLoadQueryFont(Display* a, const char* b) { return NULL; }
 KeySym XLookupKeysym(XKeyEvent* a, int b) {
     if (!a) return 0;
     unsigned int kc = *(unsigned int*)((unsigned char*)a + 84);
-    return keycode_to_keysym(kc);
+    unsigned int st = *(unsigned int*)((unsigned char*)a + 80);
+    if (b == 1) st |= 0x01;
+    return keycode_to_keysym_with_state(kc, st);
 }
 
 int XLookupString(XKeyEvent* a, char* b, int c, KeySym* d, XComposeStatus* e) {
     KeySym ks = 0;
     if (a) {
         unsigned int kc = *(unsigned int*)((unsigned char*)a + 84);
-        ks = keycode_to_keysym(kc);
+        unsigned int st = *(unsigned int*)((unsigned char*)a + 80);
+        ks = keycode_to_keysym_with_state(kc, st);
     }
     if (d) *d = ks;
     if (ks >= 0x20 && ks <= 0x7e && b && c > 0) {
@@ -1369,14 +1411,18 @@ Status XmbTextListToTextProperty(Display* a, char** b, int c, XICCEncodingStyle 
     return 0;
 }
 Bool XkbQueryExtension(Display* a, int *b, int *c, int *d, int *e, int *f) { return False; }
-KeySym XkbKeycodeToKeysym(Display* a, unsigned int b, int c, int d) { return keycode_to_keysym(b); }
+KeySym XkbKeycodeToKeysym(Display* a, unsigned int b, int c, int d) {
+    return keycode_to_keysym_with_state(b, (d == 1) ? 0x01 : 0x00);
+}
 Status XkbGetState(Display* a, unsigned int b, XkbStatePtr c) { return 0; }
 Status XkbGetUpdatedMap(Display* a, unsigned int b, XkbDescPtr c) { return 0; }
 XkbDescPtr XkbGetMap(Display* a, unsigned int b, unsigned int c) { return NULL; }
 void XkbFreeClientMap(XkbDescPtr a, unsigned int b, Bool c) {}
 void XkbFreeKeyboard(XkbDescPtr a, unsigned int b, Bool c) {}
 Bool XkbSetDetectableAutoRepeat(Display* a, Bool b, Bool* c) { if (c) *c = b; return True; }
-KeySym XKeycodeToKeysym(Display* a, unsigned int b, int c) { return keycode_to_keysym(b); }
+KeySym XKeycodeToKeysym(Display* a, unsigned int b, int c) {
+    return keycode_to_keysym_with_state(b, (c == 1) ? 0x01 : 0x00);
+}
 PointerBarrier XFixesCreatePointerBarrier(Display* a, Window b, int c, int d, int e, int f,
                                           int g, int h, int *i) { return 0; }
 void XFixesDestroyPointerBarrier(Display* a, PointerBarrier b) {}
