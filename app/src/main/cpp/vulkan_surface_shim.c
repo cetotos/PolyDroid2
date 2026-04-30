@@ -395,23 +395,37 @@ static VkResult shim_vkCreateInstance(
     if (!real_vkCreateInstance) return VK_ERROR_INITIALIZATION_FAILED;
 
     uint32_t count = pCreateInfo->enabledExtensionCount;
-    const char** newExts = (const char**)malloc(sizeof(char*) * (count + 1));
+    const char** newExts = (const char**)malloc(sizeof(char*) * (count + 4));
     uint32_t newCount = 0;
 
+    int has_surface = 0;
+    int has_android_surface = 0;
+    int wants_x11_surface = 0;
     for (uint32_t i = 0; i < count; i++) {
         const char* ext = pCreateInfo->ppEnabledExtensionNames[i];
-        if (strcmp(ext, "VK_KHR_surface") == 0 ||
-            strcmp(ext, "VK_KHR_xlib_surface") == 0 ||
+        if (strcmp(ext, "VK_KHR_surface") == 0) has_surface = 1;
+        if (strcmp(ext, "VK_KHR_android_surface") == 0) has_android_surface = 1;
+        if (strcmp(ext, "VK_KHR_xlib_surface") == 0 ||
             strcmp(ext, "VK_KHR_xcb_surface") == 0 ||
-            strcmp(ext, "VK_KHR_wayland_surface") == 0 ||
-            strcmp(ext, "VK_KHR_android_surface") == 0 ||
-            strcmp(ext, "VK_EXT_swapchain_colorspace") == 0 ||
-            strcmp(ext, "VK_KHR_get_surface_capabilities2") == 0) {
-            LOGI("Stripping %s (handled by shim, not real driver)", ext);
+            strcmp(ext, "VK_KHR_wayland_surface") == 0) {
+            wants_x11_surface = 1;
+            LOGI("stripping %s", ext);
+            continue;
+        }
+        if (strcmp(ext, "VK_EXT_swapchain_colorspace") == 0) {
+            LOGI("stripping %s", ext);
             continue;
         }
         LOGI("  ext[%u]: %s", newCount, ext);
         newExts[newCount++] = ext;
+    }
+    if (wants_x11_surface && !has_surface) {
+        newExts[newCount++] = "VK_KHR_surface";
+        LOGI("injecting VK_KHR_surface");
+    }
+    if (wants_x11_surface && !has_android_surface) {
+        newExts[newCount++] = "VK_KHR_android_surface";
+        LOGI("injecting VK_KHR_android_surface");
     }
 
     VkInstanceCreateInfo modifiedInfo = *pCreateInfo;
@@ -565,6 +579,56 @@ static VkResult shim_vkGetPhysicalDeviceSurfacePresentModesKHR(
     memcpy(pPresentModes, modes, copy * sizeof(VkPresentModeKHR));
     *pPresentModeCount = copy;
     return (copy < count) ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
+typedef struct {
+    VkStructureType sType;
+    const void* pNext;
+    VkSurfaceKHR surface;
+} VkPhysicalDeviceSurfaceInfo2KHR_t;
+
+typedef struct {
+    VkStructureType sType;
+    void* pNext;
+    VkSurfaceCapabilitiesKHR surfaceCapabilities;
+} VkSurfaceCapabilities2KHR_t;
+
+typedef struct {
+    VkStructureType sType;
+    void* pNext;
+    VkSurfaceFormatKHR surfaceFormat;
+} VkSurfaceFormat2KHR_t;
+
+static VkResult shim_vkGetPhysicalDeviceSurfaceCapabilities2KHR(
+    VkPhysicalDevice physicalDevice,
+    const VkPhysicalDeviceSurfaceInfo2KHR_t* pSurfaceInfo,
+    VkSurfaceCapabilities2KHR_t* pSurfaceCapabilities)
+{
+    return shim_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        physicalDevice, pSurfaceInfo->surface,
+        &pSurfaceCapabilities->surfaceCapabilities);
+}
+
+static VkResult shim_vkGetPhysicalDeviceSurfaceFormats2KHR(
+    VkPhysicalDevice physicalDevice,
+    const VkPhysicalDeviceSurfaceInfo2KHR_t* pSurfaceInfo,
+    uint32_t* pSurfaceFormatCount,
+    VkSurfaceFormat2KHR_t* pSurfaceFormats)
+{
+    if (!pSurfaceFormats) {
+        return shim_vkGetPhysicalDeviceSurfaceFormatsKHR(
+            physicalDevice, pSurfaceInfo->surface, pSurfaceFormatCount, NULL);
+    }
+    VkSurfaceFormatKHR* tmp = (VkSurfaceFormatKHR*)
+        malloc(sizeof(VkSurfaceFormatKHR) * (*pSurfaceFormatCount));
+    if (!tmp) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    VkResult r = shim_vkGetPhysicalDeviceSurfaceFormatsKHR(
+        physicalDevice, pSurfaceInfo->surface, pSurfaceFormatCount, tmp);
+    for (uint32_t i = 0; i < *pSurfaceFormatCount; i++) {
+        pSurfaceFormats[i].surfaceFormat = tmp[i];
+    }
+    free(tmp);
+    return r;
 }
 
 static VkResult shim_vkEnumerateInstanceExtensionProperties(
@@ -1746,6 +1810,14 @@ static VkResult shim_vkQueuePresentKHR(
         }
 
         if (acquireFd < 0 && g_using_system_driver && presentFence && pfn_waitForFences) {
+            static int s_warned = 0;
+            if (!s_warned) {
+                LOGI("WARN: no sync_fd export available! fallback to CPU wait. "
+                     "sema_fd=%p fence_fd=%p exportable=%d",
+                     (void*)pfn_getSemaphoreFdKHR, (void*)pfn_getFenceFdKHR,
+                     g_present_fence_exportable);
+                s_warned = 1;
+            }
             pfn_waitForFences(g_device, 1, &presentFence, VK_TRUE, UINT64_MAX);
         }
 
@@ -1832,6 +1904,8 @@ static VkResult shim_vkCreateDevice(
     int has_get_mem_req2 = 0;
     int has_ext_fence = 0;
     int has_ext_fence_fd = 0;
+    int has_ext_sema = 0;
+    int has_ext_sema_fd = 0;
 
     for (uint32_t i = 0; i < count; i++) {
         const char* ext = pCreateInfo->ppEnabledExtensionNames[i];
@@ -1852,6 +1926,8 @@ static VkResult shim_vkCreateDevice(
         if (strcmp(ext, "VK_KHR_get_memory_requirements2") == 0) has_get_mem_req2 = 1;
         if (strcmp(ext, "VK_KHR_external_fence") == 0) has_ext_fence = 1;
         if (strcmp(ext, "VK_KHR_external_fence_fd") == 0) has_ext_fence_fd = 1;
+        if (strcmp(ext, "VK_KHR_external_semaphore") == 0) has_ext_sema = 1;
+        if (strcmp(ext, "VK_KHR_external_semaphore_fd") == 0) has_ext_sema_fd = 1;
         newExts[newCount++] = ext;
     }
 
@@ -1887,6 +1963,12 @@ static VkResult shim_vkCreateDevice(
     }
 
     uint32_t baseCount = newCount;
+    if (!has_ext_sema) {
+        newExts[newCount++] = "VK_KHR_external_semaphore";
+    }
+    if (!has_ext_sema_fd) {
+        newExts[newCount++] = "VK_KHR_external_semaphore_fd";
+    }
     if (!has_ext_fence) {
         newExts[newCount++] = "VK_KHR_external_fence";
     }
@@ -1901,7 +1983,7 @@ static VkResult shim_vkCreateDevice(
     LOGI("vkCreateDevice with %u extensions (stripped %u)", newCount, count - newCount);
     VkResult result = real_createDevice(physicalDevice, &modInfo, pAllocator, pDevice);
     if (result == VK_ERROR_EXTENSION_NOT_PRESENT && newCount > baseCount) {
-        LOGI("vkCreateDevice rejected fence-fd ext");
+        LOGI("vkCreateDevice rejected an injected sync ext! retrying without injects");
         modInfo.enabledExtensionCount = baseCount;
         result = real_createDevice(physicalDevice, &modInfo, pAllocator, pDevice);
     }
@@ -2025,6 +2107,10 @@ PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName)
         return (PFN_vkVoidFunction)shim_vkGetPhysicalDeviceSurfaceFormatsKHR;
     if (strcmp(pName, "vkGetPhysicalDeviceSurfacePresentModesKHR") == 0)
         return (PFN_vkVoidFunction)shim_vkGetPhysicalDeviceSurfacePresentModesKHR;
+    if (strcmp(pName, "vkGetPhysicalDeviceSurfaceCapabilities2KHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkGetPhysicalDeviceSurfaceCapabilities2KHR;
+    if (strcmp(pName, "vkGetPhysicalDeviceSurfaceFormats2KHR") == 0)
+        return (PFN_vkVoidFunction)shim_vkGetPhysicalDeviceSurfaceFormats2KHR;
 
     if (strcmp(pName, "vkCreateDevice") == 0)
         return (PFN_vkVoidFunction)shim_vkCreateDevice;

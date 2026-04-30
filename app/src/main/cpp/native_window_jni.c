@@ -336,7 +336,9 @@ static void* compositor_thread(void* arg) {
                 .height = height,
                 .layers = 1,
                 .format = format,
-                .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
+                .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
+                         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+                         AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY,
                 .stride = 0,
                 .rfu0 = 0,
                 .rfu1 = 0,
