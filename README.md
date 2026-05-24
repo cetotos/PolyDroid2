@@ -4,7 +4,7 @@
 
 # PolyDroid 2
 
-[![Discord](https://img.shields.io/discord/1495088499383210226?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/eerbzVA3)
+[![Discord](https://img.shields.io/discord/1495088499383210226?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/MwHShrt5m)
 
 PolyDroid 2 is an updated, more native rewrite of PolyDroid, which runs the Polytoria Client on Android.
 While PolyDroid ran the game with the Windows client, using multiple translation layers like DXVK and Wine, PolyDroid 2 uses the Linux client and only 1 translation layer being [Box64](https://github.com/ptitSeb/box64) to translate x86-64 to ARM64.
