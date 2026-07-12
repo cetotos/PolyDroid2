@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest something new that the app doesn't have or do at all
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is for new functionality. If an existing feature is broken or works unexpectedly, use the bug report template instead.
+  - type: input
+    id: feature
+    attributes:
+      label: Feature
+      description: What feature or functionality should the app have?
+      placeholder: e.g. Physical keyboard and mouse support
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: How would it work?
+      description: Where it is in the settings, any settings it would need, how it would be used etc.
+    validations:
+      required: true
+  - type: textarea
+    id: prior-art
+    attributes:
+      label: Does another app have this?
+      description: If another app has this feature or functionality (Winlator, Polytoria client, Mobox etc.) link or explain it.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Mockups, drawings, screenshots, anything else you'd like to add?

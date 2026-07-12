@@ -11,8 +11,8 @@ import java.util.zip.GZIPInputStream
 
 object RootFs {
     private const val TAG = "PolyDroid2"
-    private const val VERSION = 7
-    private const val LIBS_VERSION = 8
+    private const val VERSION = 8
+    private const val LIBS_VERSION = 9
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",
@@ -46,6 +46,15 @@ object RootFs {
         "x86_64-libs/libdns_resolver.so",
         "x86_64-libs/libunity_crash_fix.so",
         "x86_64-libs/libX11_stub.so",
+        "x86_64-libs/libpthread_recursive_fix.so",
+        "x86_64-libs/libctype_fix.so",
+        "x86_64-libs/libgodot_ctype_patch.so",
+        "x86_64-libs/libeaccess_shim.so",
+        "x86_64-libs/libXrandr.so.2",
+        "x86_64-libs/libXi.so.6",
+        "x86_64-libs/libXinerama.so.1",
+        "x86_64-libs/libXrender.so.1",
+        "x86_64-libs/libasound.so.2",
         "arm64-x11-libs/libandroid-support.so",
         "arm64-x11-libs/libXau.so",
         "arm64-x11-libs/libXdmcp.so",
@@ -56,6 +65,26 @@ object RootFs {
     )
 
     fun rootDir(ctx: Context): File = File(ctx.filesDir, "rootfs")
+
+    @Volatile private var is2xCached: Boolean? = null
+    fun isPolytoria2(ctx: Context): Boolean {
+        is2xCached?.let { return it }
+        val polyDir = File(rootDir(ctx), "polytoria")
+        val pck = polyDir.listFiles { f -> f.isFile && f.name.endsWith(".pck") }?.firstOrNull()
+        val v = pck != null && try {
+            java.io.RandomAccessFile(pck, "r").use { raf ->
+                val m = ByteArray(4)
+                raf.readFully(m)
+                m[0] == 'G'.code.toByte() && m[1] == 'D'.code.toByte() &&
+                    m[2] == 'P'.code.toByte() && m[3] == 'C'.code.toByte()
+            }
+        } catch (e: Exception) { false }
+        is2xCached = v
+        return v
+    }
+
+    // call after the active client symlink changes so the next isPolytoria2 re-probes.
+    fun invalidateClientCache() { is2xCached = null }
 
     fun isInstalled(ctx: Context): Boolean {
         val versionFile = File(rootDir(ctx), ".pd_version")
@@ -139,9 +168,7 @@ object RootFs {
 
         val stages = mutableListOf<Stage>()
         if (needRootfs) {
-            val rootfsBytes = assetLen(ctx, "rootfs.tar.xz")
-            val polyBytes = assetLen(ctx, "polytoria_client.txz")
-            stages.add(Stage("Extracting rootfs and client...", rootfsBytes + polyBytes))
+            stages.add(Stage("Extracting rootfs...", assetLen(ctx, "rootfs.tar.xz")))
         }
         if (needLibs) {
             stages.add(Stage("Extracting libraries...", LIB_ASSETS.sumOf { assetLen(ctx, it) }))
@@ -154,20 +181,7 @@ object RootFs {
             val root = rootDir(ctx)
             if (root.exists()) root.deleteRecursively()
             root.mkdirs()
-
-            val polyError = arrayOfNulls<Throwable>(1)
-            val polyThread = Thread({
-                try {
-                    extractPolytoria(ctx, progress)
-                } catch (t: Throwable) {
-                    polyError[0] = t
-                }
-            }, "PolyExtract").apply { start() }
-
             install(ctx, progress)
-            polyThread.join()
-            polyError[0]?.let { throw it }
-
             progress.completeStage()
         }
         if (needLibs) {
@@ -223,55 +237,6 @@ object RootFs {
         root.resolve("usr/sbin").listFiles()?.forEach { it.setExecutable(true, false) }
         File(root, ".pd_version").writeText(VERSION.toString())
         Log.i(TAG, "Rootfs extraction complete")
-    }
-
-    private fun extractPolytoria(ctx: Context, progress: Progress) {
-        val polyDir = File(rootDir(ctx), "polytoria")
-        if (File(polyDir, "Polytoria Client.x86_64").exists()) {
-            return
-        }
-
-        polyDir.mkdirs()
-        Log.i(TAG, "Extracting client...")
-
-        ctx.assets.open("polytoria_client.txz").use { raw ->
-            CountingInputStream(raw) { progress.addBytes(it) }.use { counted ->
-                BufferedInputStream(counted, 65536).use { buffered ->
-                    XZInputStream(buffered).use { xz ->
-                        TarArchiveInputStream(xz).use { tar ->
-                            var entry = tar.nextEntry
-                            while (entry != null) {
-                                val outFile = File(polyDir, entry.name)
-                                if (entry.isDirectory) {
-                                    outFile.mkdirs()
-                                } else if (entry.isSymbolicLink) {
-                                    try {
-                                        val target = java.nio.file.Paths.get(entry.linkName)
-                                        val link = outFile.toPath()
-                                        outFile.parentFile?.mkdirs()
-                                        java.nio.file.Files.createSymbolicLink(link, target)
-                                    } catch (e: Exception) {
-                                        Log.w(TAG, "failed to create symlink: ${entry.name} -> ${entry.linkName}")
-                                    }
-                                } else {
-                                    outFile.parentFile?.mkdirs()
-                                    outFile.outputStream().use { out ->
-                                        tar.copyTo(out)
-                                    }
-                                    if (entry.mode and 0b001_001_001 != 0) {
-                                        outFile.setExecutable(true, false)
-                                    }
-                                }
-                                entry = tar.nextEntry
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        File(polyDir, "Polytoria Client.x86_64").setExecutable(true, false)
-        Log.i(TAG, "Extracted successfuly")
     }
 
     fun deleteSfx(polyDir: File) {
@@ -468,6 +433,16 @@ object RootFs {
             Log.w(TAG, "libX11_stub.so not found in assets: ${e.message}")
         }
 
+        for (so in listOf("libpthread_recursive_fix.so", "libctype_fix.so", "libgodot_ctype_patch.so", "libeaccess_shim.so", "libXrandr.so.2", "libXi.so.6", "libXinerama.so.1", "libXrender.so.1", "libasound.so.2")) {
+            try {
+                val dest = File(x86LibDir, so)
+                copyAssetCounted(ctx, "x86_64-libs/$so", dest, progress)
+                dest.setReadable(true, false)
+            } catch (e: Exception) {
+                Log.w(TAG, "godot shim $so not found: ${e.message}")
+            }
+        }
+
         for (lib in listOf("libandroid-support.so", "libXau.so", "libXdmcp.so", "libxcb.so", "libX11.so", "libXext.so", "libstdc++.so.6")) {
             val dest = File(arm64NativeDir, lib)
             copyAssetCounted(ctx, "arm64-x11-libs/$lib", dest, progress)
@@ -486,11 +461,12 @@ object RootFs {
             }
         }
 
-        val vkShimSrc = File(nativeDir, "libvulkan_surface_shim.so")
-        if (vkShimSrc.exists()) {
-            vkShimSrc.copyTo(File(arm64NativeDir, "libvulkan.so.1"), overwrite = true)
-            File(arm64NativeDir, "libvulkan.so.1").setReadable(true, false)
-            File(arm64NativeDir, "libvulkan.so.1").setExecutable(true, false)
+        val dbusStub = File(nativeDir, "libdbus-1.so")
+        if (dbusStub.exists()) {
+            val dbusVersioned = File(arm64NativeDir, "libdbus-1.so.3")
+            dbusStub.copyTo(dbusVersioned, overwrite = true)
+            dbusVersioned.setReadable(true, false)
+            dbusVersioned.setExecutable(true, false)
         }
 
         val libDir = File("$rootPath/usr/lib/aarch64-linux-gnu")
@@ -523,13 +499,6 @@ object RootFs {
                     srcFile.copyTo(File(libDir, dest), overwrite = true)
                 }
             }
-        }
-
-        val box64 = File(nativeDir, "libbox64.so")
-        if (box64.exists()) {
-            val box64Guest = File("$rootPath/usr/bin/box64")
-            box64.copyTo(box64Guest, overwrite = true)
-            box64Guest.setExecutable(true, false)
         }
 
         File(root, ".pd_libs_version").writeText(LIBS_VERSION.toString())

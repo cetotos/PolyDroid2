@@ -4,20 +4,14 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <poll.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <pthread.h>
 
-static void stub_log(const char* fmt, ...) {
-    char buf[256];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    if (n > 0) write(STDERR_FILENO, buf, (size_t)n);
-}
 typedef unsigned long XID;
 typedef XID Window;
 typedef XID Drawable;
@@ -315,8 +309,6 @@ static void ensure_display_init(void) {
     if (s_display_initialized) return;
     s_display_initialized = 1;
     s_screen.display = &s_display;
-    stub_log("stubx11: display initialized (%dx%d)\n",
-            s_screen.width, s_screen.height);
 }
 
 __attribute__((constructor))
@@ -325,13 +317,10 @@ static void init_from_env(void) {
     const char* h = getenv("POLYDROID_SCREEN_HEIGHT");
     if (w) s_screen.width = atoi(w);
     if (h) s_screen.height = atoi(h);
-    // stub_log("stubx11: oaded (screen=%dx%d)\n",
-    //        s_screen.width, s_screen.height);
 }
 
 #define DUMMY_WINDOW ((Window)0xDEAD01)
 #define DUMMY_COLORMAP ((Colormap)0x20)
-
 
 // -------------- do a REAL X11 connection to Lorie for input ---------
 static int s_x11_fd = -1;
@@ -356,6 +345,8 @@ static int s_eq_count = 0;
 static int s_eq_push_log = 0;
 static void eq_push(const XEvent *ev) {
     if (s_eq_count >= EQ_SIZE) {
+        unsigned char *op = (unsigned char *)&s_eq[s_eq_head];
+        if (*(int *)op == 35) { void *od = *(void **)(op + 48); if (od) free(od); }
         s_eq_head = (s_eq_head + 1) % EQ_SIZE;
         s_eq_count--;
     }
@@ -391,9 +382,7 @@ static int write_exact(int fd, const void *buf, int n) {
 
 static int x11_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
-        stub_log("stubx11: socket(): %s\n", strerror(errno));
-        return -1;
+    if (fd < 0) { return -1;
     }
 
     struct sockaddr_un sa;
@@ -409,17 +398,14 @@ static int x11_connect(void) {
         usleep(200000);
     }
     if (!ok) {
-        stub_log("stubx11: X11 connect failed! %s\n", strerror(errno));
         close(fd);
         return -1;
     }
-    stub_log("stubx11: connected to X11 server fd=%d\n", fd);
     unsigned char creq[12] = { 'l',0, 11,0, 0,0, 0,0, 0,0, 0,0 };
     if (write_exact(fd, creq, 12) < 0) { close(fd); return -1; }
     unsigned char hdr[8];
     if (read_exact(fd, hdr, 8) < 0) { close(fd); return -1; }
     if (hdr[0] != 1) {
-        stub_log("stubx11: X11 setup rejected! status=%d\n", hdr[0]);
         close(fd);
         return -1;
     }
@@ -428,7 +414,6 @@ static int x11_connect(void) {
     int add_bytes = add_words * 4;
     unsigned char *sd = (unsigned char*)malloc(add_bytes);
     if (!sd || read_exact(fd, sd, add_bytes) < 0) {
-        stub_log("stubx11: failed reading setup data\n");
         free(sd); close(fd); return -1;
     }
     s_resource_base = *(uint32_t*)(sd + 4);
@@ -440,8 +425,6 @@ static int x11_connect(void) {
     int scr_off = 32 + vlen + vpad + nfmt * 8;
     if (nscr > 0 && scr_off + 40 <= add_bytes) {
         s_x11_root = *(uint32_t*)(sd + scr_off);
-        stub_log("stubx11: root=0x%x res_base=0x%x res_mask=0x%x\n",
-                 s_x11_root, s_resource_base, s_resource_mask);
     }
 
     free(sd);
@@ -471,15 +454,13 @@ static void x11_create_and_map(int w, int h) {
     write_exact(s_x11_fd, mw, 8);
     unsigned char cwa[16];
     memset(cwa, 0, 16);
-    cwa[0] = 2;                             // ChangeWindowAttributes opcode
-    *(uint16_t*)(cwa+2) = 4;               // length = 4 dwords (16 bytes)
-    *(uint32_t*)(cwa+4) = s_x11_root;      // root window */
-    *(uint32_t*)(cwa+8) = 0x800;           // value-mask: EventMask
-    *(uint32_t*)(cwa+12) = 0x0022004F;     // same event mask
+    cwa[0] = 2;
+    *(uint16_t*)(cwa+2) = 4;
+    *(uint32_t*)(cwa+4) = s_x11_root
+    *(uint32_t*)(cwa+8) = 0x800;
+    *(uint32_t*)(cwa+12) = 0x0022004F;
     write_exact(s_x11_fd, cwa, 16);
 
-/*    stub_log("stubx11: created and mapped window 0x%x (%dx%d)",
-             s_real_window, w, h, s_x11_root);*/
 }
 
 // ----------- wire event parsing ------
@@ -503,8 +484,6 @@ static void parse_and_queue(const unsigned char *wire) {
     if (s_event_log_count < 10) {
         int16_t ex = *(int16_t*)(wire+24);
         int16_t ey = *(int16_t*)(wire+26);
-        // stub_log("stubx11: wire event type=%d detail=%d win=0x%x x=%d y=%d\n",
-        //          type, wire[1], *(uint32_t*)(wire+12), (int)ex, (int)ey);
         s_event_log_count++;
     }
     XEvent ev;
@@ -574,7 +553,6 @@ static void parse_and_queue(const unsigned char *wire) {
 static unsigned char s_rbuf[8192];
 static int s_rbuf_len = 0;
 static int s_input_sock = -1;
-static int s_shift_held = 0;
 static void input_sock_init(void);
 static void drain_input_socket(void);
 static int s_pending_calls = 0;
@@ -586,8 +564,6 @@ static void x11_drain_events(void) {
     static int s_drain_log = 0;
     s_pending_calls++;
 /*    if (s_pending_calls <= 5 || (s_pending_calls % 1000 == 0 && s_pending_calls <= 10000)) {
-        stub_log("stubx11: drain called #%d, fd=%d, eq=%d\n",
-                 s_pending_calls, s_x11_fd, s_eq_count);
     }*/
     struct pollfd pfd = { .fd = s_x11_fd, .events = POLLIN };
     while (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
@@ -597,7 +573,6 @@ static void x11_drain_events(void) {
         if (n <= 0) break;
         s_rbuf_len += n;
 /*        if (s_drain_log < 20) {
-            stub_log("stubx11: drain: read %d bytes, buf=%d\n", n, s_rbuf_len);
             s_drain_log++;
         }*/
 
@@ -605,7 +580,6 @@ static void x11_drain_events(void) {
         while (s_rbuf_len - consumed >= 32) {
             uint8_t t = s_rbuf[consumed] & 0x7F;
             if (t == 0) {
-                stub_log("stubx11: X11 error code=%d\n", s_rbuf[consumed + 1]);
                 consumed += 32;
                 continue;
             }
@@ -642,9 +616,7 @@ static int s_input_log = 0;
 static void input_sock_init(void) {
     if (s_input_sock >= 0) return;
     s_input_sock = socket(AF_UNIX, SOCK_DGRAM, 0);
-    if (s_input_sock < 0) {
-        stub_log("stubx11: input socket create failed: %s\n", strerror(errno));
-        return;
+    if (s_input_sock < 0) { return;
     }
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -653,12 +625,46 @@ static void input_sock_init(void) {
     memcpy(addr.sun_path + 1, "polydroid_input", 15);
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 15;
     if (bind(s_input_sock, (struct sockaddr*)&addr, len) < 0) {
-        stub_log("stubx11: input socket bind failed: %s\n", strerror(errno));
         close(s_input_sock);
         s_input_sock = -1;
         return;
     }
-    stub_log("stubx11: input socket listening (fd=%d)\n", s_input_sock);
+}
+
+static unsigned int s_btn_mask = 0; // X11 ButtonNMask of held mouse buttons
+static int s_ptr_x = 0, s_ptr_y = 0;
+static unsigned long s_xi_serial = 0;
+static unsigned int s_xi_cookie = 1;
+static void push_xi_touch(int evtype, int index, double x, double y, unsigned long t) {
+    unsigned char *de = (unsigned char *)calloc(1, 256);  // sizeof(XIDeviceEvent)=200
+    if (!de) return;
+    *(int*)(de+0)            = 35;
+    *(unsigned long*)(de+8)  = ++s_xi_serial;
+    *(Display**)(de+24)      = &s_display;
+    *(int*)(de+32)           = 131;
+    *(int*)(de+36)           = evtype;
+    *(unsigned long*)(de+40) = t;
+    *(int*)(de+48)           = 2;
+    *(int*)(de+52)           = 2;
+    *(int*)(de+56)           = index;
+    *(unsigned long*)(de+64) = (unsigned long)s_x11_root;
+    *(unsigned long*)(de+72) = (unsigned long)DUMMY_WINDOW;
+    *(double*)(de+88)        = x;
+    *(double*)(de+96)        = y;
+    *(double*)(de+104)       = x;
+    *(double*)(de+112)       = y;
+
+    XEvent ev;
+    memset(&ev, 0, sizeof(ev));
+    unsigned char *q = (unsigned char *)&ev;
+    *(int*)(q+0)            = 35;
+    *(unsigned long*)(q+8)  = s_xi_serial;
+    *(Display**)(q+24)      = &s_display;
+    *(int*)(q+32)           = 131;
+    *(int*)(q+36)           = evtype;
+    *(unsigned int*)(q+40)  = s_xi_cookie++;
+    *(void**)(q+48)         = de;
+    eq_push(&ev);
 }
 
 static void drain_input_socket(void) {
@@ -669,8 +675,6 @@ static void drain_input_socket(void) {
         if (n < (ssize_t)sizeof(msg)) break;
 
         if (s_input_log < 10) {
-            stub_log("stubx11: input_sock: type=%d btn=%d x=%d y=%d\n",
-                     msg.type, msg.button, msg.x, msg.y);
             s_input_log++;
         }
 
@@ -687,34 +691,42 @@ static void drain_input_socket(void) {
         *(int*)(p+76)      = msg.y;
         *(int*)(p+88)      = 1;
 
+        // Godot needs the held button mask in motion state or drags dont register
+        unsigned int btnbit = (msg.button >= 1 && msg.button <= 3) ? (1u << (7 + msg.button)) : 0u;
+
+        if (msg.type <= 3 || (msg.type >= 10 && msg.type <= 12)) { s_ptr_x = msg.x; s_ptr_y = msg.y; }
+
         if (msg.type == 1) {
+            *(unsigned int*)(p+80) = s_btn_mask;
             *(int*)(p) = 6;
             eq_push(&ev);
         } else if (msg.type == 2) {
+            *(unsigned int*)(p+80) = s_btn_mask;
             *(int*)(p) = 6;
             eq_push(&ev);
             *(int*)(p) = 4;
             *(unsigned int*)(p+84) = (unsigned int)msg.button;
             eq_push(&ev);
+            s_btn_mask |= btnbit;
         } else if (msg.type == 3) {
+            s_btn_mask &= ~btnbit;
+            *(unsigned int*)(p+80) = s_btn_mask;
             *(int*)(p) = 6;
             eq_push(&ev);
             *(int*)(p) = 5;
             *(unsigned int*)(p+84) = (unsigned int)msg.button;
             eq_push(&ev);
         } else if (msg.type == 4 || msg.type == 5) {
-            unsigned int keycode = (unsigned int)msg.x;
             *(int*)(p) = (msg.type == 4) ? 2 : 3;
-            *(unsigned int*)(p+80) = s_shift_held ? 0x01 : 0x00;
-            *(unsigned int*)(p+84) = keycode;
+            *(unsigned int*)(p+84) = (unsigned int)msg.x;
             eq_push(&ev);
-            if (keycode == 50 || keycode == 62) {
-                s_shift_held = (msg.type == 4) ? 1 : 0;
-            }
+        } else if (msg.type >= 10 && msg.type <= 12) {
+            int evtype = (msg.type == 10) ? 18 : (msg.type == 11) ? 19 : 20;
+            push_xi_touch(evtype, (int)msg.button, (double)msg.x, (double)msg.y,
+                          (unsigned long)msg.time_ms);
         }
     }
 }
-
 
 static KeySym s_keycode_to_keysym[256] = {
     [  9] = 0xff1b, /* Escape */
@@ -770,60 +782,28 @@ static KeySym s_keycode_to_keysym[256] = {
     [134] = 0xffec, /* Super_R */
 };
 
-static KeySym s_keycode_to_keysym_shifted[256] = {
-    [ 10] = 0x0021, /* ! */  [ 11] = 0x0040, /* @ */  [ 12] = 0x0023, /* # */
-    [ 13] = 0x0024, /* $ */  [ 14] = 0x0025, /* % */  [ 15] = 0x005e, /* ^ */
-    [ 16] = 0x0026, /* & */  [ 17] = 0x002a, /* * */  [ 18] = 0x0028, /* ( */
-    [ 19] = 0x0029, /* ) */
-    [ 20] = 0x005f, /* _ */  [ 21] = 0x002b, /* + */
-    [ 24] = 0x0051, /* Q */  [ 25] = 0x0057, /* W */  [ 26] = 0x0045, /* E */
-    [ 27] = 0x0052, /* R */  [ 28] = 0x0054, /* T */  [ 29] = 0x0059, /* Y */
-    [ 30] = 0x0055, /* U */  [ 31] = 0x0049, /* I */  [ 32] = 0x004f, /* O */
-    [ 33] = 0x0050, /* P */
-    [ 34] = 0x007b, /* { */  [ 35] = 0x007d, /* } */
-    [ 38] = 0x0041, /* A */  [ 39] = 0x0053, /* S */  [ 40] = 0x0044, /* D */
-    [ 41] = 0x0046, /* F */  [ 42] = 0x0047, /* G */  [ 43] = 0x0048, /* H */
-    [ 44] = 0x004a, /* J */  [ 45] = 0x004b, /* K */  [ 46] = 0x004c, /* L */
-    [ 47] = 0x003a, /* : */  [ 48] = 0x0022, /* " */
-    [ 49] = 0x007e, /* ~ */
-    [ 51] = 0x007c, /* | */
-    [ 52] = 0x005a, /* Z */  [ 53] = 0x0058, /* X */  [ 54] = 0x0043, /* C */
-    [ 55] = 0x0056, /* V */  [ 56] = 0x0042, /* B */  [ 57] = 0x004e, /* N */
-    [ 58] = 0x004d, /* M */
-    [ 59] = 0x003c, /* < */  [ 60] = 0x003e, /* > */
-    [ 61] = 0x003f, /* ? */
-};
-
 static KeySym keycode_to_keysym(unsigned int keycode) {
-    if (keycode >= 256) return 0;
-    return s_keycode_to_keysym[keycode];
+    if (keycode < 256) return s_keycode_to_keysym[keycode];
+    return 0;
 }
 
-static KeySym keycode_to_keysym_with_state(unsigned int keycode, unsigned int state) {
-    if (keycode >= 256) return 0;
-    if (state & 0x01) {
-        KeySym shifted = s_keycode_to_keysym_shifted[keycode];
-        if (shifted) return shifted;
-    }
-    return s_keycode_to_keysym[keycode];
+XSizeHints* XAllocSizeHints(void) { return (XSizeHints*)calloc(1, sizeof(XSizeHints));
 }
 
-XSizeHints* XAllocSizeHints(void) {
-    return (XSizeHints*)calloc(1, sizeof(XSizeHints));
+XWMHints* XAllocWMHints(void) { return (XWMHints*)calloc(1, sizeof(XWMHints));
 }
 
-XWMHints* XAllocWMHints(void) {
-    return (XWMHints*)calloc(1, sizeof(XWMHints));
-}
-
-XClassHint* XAllocClassHint(void) {
-    return (XClassHint*)calloc(1, sizeof(XClassHint));
+XClassHint* XAllocClassHint(void) { return (XClassHint*)calloc(1, sizeof(XClassHint));
 }
 
 int XChangePointerControl(Display* a, Bool b, Bool c, int d, int e, int f) { return 0; }
 
+int XChangeWindowAttributes(Display* a, Window b, unsigned long c, XSetWindowAttributes* d) { return 0;
+}
+
 int XChangeProperty(Display* a, Window b, Atom c, Atom d, int e, int f,
-                    const unsigned char* g, int h) { return 0; }
+                    const unsigned char* g, int h) { return 0;
+}
 
 static int s_xcheck_log = 0;
 Bool XCheckIfEvent(Display* a, XEvent *b, Bool (*pred)(Display*,XEvent*,XPointer), XPointer d) {
@@ -841,8 +821,7 @@ Bool XCheckIfEvent(Display* a, XEvent *b, Bool (*pred)(Display*,XEvent*,XPointer
                 s_eq[dst] = s_eq[src];
             }
             s_eq_count--;
-            if (s_xcheck_log < 67 /* im tired */) {
-                // stub_log("stubx11: XCheckIfEvent matched type=%d remaining=%d\n", type, s_eq_count);
+            if (s_xcheck_log < 67) {
                 s_xcheck_log++;
             }
             return True;
@@ -851,10 +830,76 @@ Bool XCheckIfEvent(Display* a, XEvent *b, Bool (*pred)(Display*,XEvent*,XPointer
     return False;
 }
 
+static Bool eq_pop_head(XEvent *out) {
+    if (s_eq_count <= 0) return False;
+    memcpy(out, &s_eq[s_eq_head], XEVENT_REAL_SIZE);
+    s_eq_head = (s_eq_head + 1) % EQ_SIZE;
+    s_eq_count--;
+    return True;
+}
+
+static Bool eq_pop_typed(int type, XEvent *out) {
+    for (int i = 0; i < s_eq_count; i++) {
+        int idx = (s_eq_head + i) % EQ_SIZE;
+        if (*(int*)&s_eq[idx] == type) {
+            memcpy(out, &s_eq[idx], XEVENT_REAL_SIZE);
+            for (int j = i; j < s_eq_count - 1; j++) {
+                int dst = (s_eq_head + j) % EQ_SIZE;
+                int src = (s_eq_head + j + 1) % EQ_SIZE;
+                s_eq[dst] = s_eq[src];
+            }
+            s_eq_count--;
+            return True;
+        }
+    }
+    return False;
+}
+
+int XNextEvent(Display* a, XEvent* b) {
+    if (!b) return 0;
+    if (s_events_ready) x11_drain_events();
+    if (!eq_pop_head(b)) memset(b, 0, sizeof(*b));
+    return 0;
+}
+
+int XMaskEvent(Display* a, long mask, XEvent* b) {
+    (void)mask;
+    if (!b) return 0;
+    if (s_events_ready) x11_drain_events();
+    if (!eq_pop_head(b)) memset(b, 0, sizeof(*b));
+    return 0;
+}
+
+Bool XCheckMaskEvent(Display* a, long mask, XEvent* b) {
+    (void)mask;
+    if (!s_events_ready || !b) return False;
+    x11_drain_events();
+    return eq_pop_head(b);
+}
+
+Bool XCheckWindowEvent(Display* a, Window w, long mask, XEvent* b) {
+    (void)w; (void)mask;
+    if (!s_events_ready || !b) return False;
+    x11_drain_events();
+    return eq_pop_head(b);
+}
+
+Bool XCheckTypedEvent(Display* a, int type, XEvent* b) {
+    if (!s_events_ready || !b) return False;
+    x11_drain_events();
+    return eq_pop_typed(type, b);
+}
+
+Bool XCheckTypedWindowEvent(Display* a, Window w, int type, XEvent* b) {
+    (void)w;
+    if (!s_events_ready || !b) return False;
+    x11_drain_events();
+    return eq_pop_typed(type, b);
+}
+
 int XClearWindow(Display* a, Window b) { return 0; }
 
 int XCloseDisplay(Display* a) {
-    stub_log("stubx11: XCloseDisplay\n");
     if (s_x11_fd >= 0) {
         close(s_x11_fd);
         s_x11_fd = -1;
@@ -868,17 +913,27 @@ int XCloseDisplay(Display* a) {
 int XConvertSelection(Display* a, Atom b, Atom c, Atom d, Window e, Time f) { return 0; }
 
 Pixmap XCreateBitmapFromData(Display *dpy, Drawable d, const char *data,
-                             unsigned int width, unsigned int height) {
-    return 0x1;
+                             unsigned int width, unsigned int height) { return 0x1;
 }
 
-Colormap XCreateColormap(Display* a, Window b, struct Visual* c, int d) {
-    stub_log("stubx11: XCreateColormap -> 0x%lx\n", DUMMY_COLORMAP);
-    return DUMMY_COLORMAP;
+Colormap XCreateColormap(Display* a, Window b, struct Visual* c, int d) { return DUMMY_COLORMAP;
 }
 
 Cursor XCreatePixmapCursor(Display* a, Pixmap b, Pixmap c, XColor* d, XColor* e,
                            unsigned int f, unsigned int g) { return 0x1; }
+
+Pixmap XCreatePixmap(Display* a, Drawable d, unsigned int w, unsigned int h, unsigned int depth) {
+    static unsigned long pixmap_id = 0x400000;
+    return ++pixmap_id;
+}
+
+Status XParseColor(Display* a, Colormap c, const char* spec, XColor* exact) { return 1;
+}
+
+unsigned long XNextRequest(Display* a) {
+    static unsigned long req = 1;
+    return ++req;
+}
 
 Cursor XCreateFontCursor(Display* a, unsigned int b) { return 0x1; }
 
@@ -889,8 +944,7 @@ XFontSet XCreateFontSet(Display* a, const char* b, char*** c, int* d, char** e) 
     return NULL;
 }
 
-GC XCreateGC(Display* a, Drawable b, unsigned long c, XGCValues* d) {
-    return (GC)0x1;
+GC XCreateGC(Display* a, Drawable b, unsigned long c, XGCValues* d) { return (GC)0x1;
 }
 
 static int dummy_destroy_image(XImage* img) { free(img->data); free(img); return 0; }
@@ -922,9 +976,7 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y,
                      unsigned int width, unsigned int height,
                      unsigned int border_width, int depth,
                      unsigned int c_class, struct Visual* visual,
-                     unsigned long valuemask, XSetWindowAttributes* attributes) {
-    stub_log("stubx11: XCreateWindow(%ux%u) -> 0x%lx\n", width, height, DUMMY_WINDOW);
-    return DUMMY_WINDOW;
+                     unsigned long valuemask, XSetWindowAttributes* attributes) { return DUMMY_WINDOW;
 }
 
 int XDefineCursor(Display* a, Window b, Cursor c) { return 0; }
@@ -951,7 +1003,6 @@ int XEventsQueued(Display* a, int b) {
     if (!s_events_ready) return 0;
     x11_drain_events();
     if (s_xeq_log < 5) {
-        stub_log("stubx11: XEventsQueued -> %d\n", s_eq_count);
         s_xeq_log++;
     }
     return s_eq_count;
@@ -962,20 +1013,18 @@ Bool XFilterEvent(XEvent *event, Window w) { return False; }
 
 int XFlush(Display* a) { return 0; }
 
-int XFree(void* a) {
-    return 0;
+int XFree(void* a) { return 0;
 }
 
 int XFreeCursor(Display* a, Cursor b) { return 0; }
-void XFreeFontSet(Display* a, XFontSet b) {}
+void XFreeFontSet(Display* a, XFontSet b) { }
 int XFreeGC(Display* a, GC b) { return 0; }
 int XFreeFont(Display* a, XFontStruct* b) { if (b) free(b); return 0; }
 int XFreeModifiermap(XModifierKeymap* a) { if (a) { free(a->modifiermap); free(a); } return 0; }
 int XFreePixmap(Display* a, Pixmap b) { return 0; }
-void XFreeStringList(char** a) { /* no-op, we don't allocate these */ }
+void XFreeStringList(char** a) { }
 
 char* XGetAtomName(Display *a, Atom b) {
-    /* Return a strdup'd name so XFree works */
     char buf[32];
     snprintf(buf, sizeof(buf), "ATOM_%lu", b);
     return strdup(buf);
@@ -1056,9 +1105,7 @@ Status XGetWMNormalHints(Display *a, Window b, XSizeHints *c, long *d) {
     return 0;
 }
 
-int XIfEvent(Display* a, XEvent *b, Bool (*c)(Display*,XEvent*,XPointer), XPointer d) {
-    /* Block forever — shouldn't be called in our stub scenario */
-    return 0;
+int XIfEvent(Display* a, XEvent *b, Bool (*c)(Display*,XEvent*,XPointer), XPointer d) { return 0;
 }
 
 int XGrabKeyboard(Display* a, Window b, Bool c, int d, int e, Time f) { return 0; }
@@ -1068,15 +1115,13 @@ int XGrabServer(Display* a) { return 0; }
 
 Status XIconifyWindow(Display* a, Window b, int c) { return 1; }
 
-KeyCode XKeysymToKeycode(Display* a, KeySym b) {
-    for (int i = 0; i < 256; i++) {
+KeyCode XKeysymToKeycode(Display* a, KeySym b) {    for (int i = 0; i < 256; i++) {
         if (s_keycode_to_keysym[i] == b) return (KeyCode)i;
     }
     return 0;
 }
 
-char* XKeysymToString(KeySym a) {
-    return "unknown";
+char* XKeysymToString(KeySym a) { return "unknown";
 }
 
 int XInstallColormap(Display* a, Colormap b) { return 0; }
@@ -1086,12 +1131,13 @@ static struct { const char* name; Atom id; } s_atoms[MAX_ATOMS];
 static int s_atom_count = 0;
 
 Atom XInternAtom(Display* a, const char* b, Bool c) {
-    if (!b) return None;
+    if (!b) { return None; }
     /* Search existing */
     for (int i = 0; i < s_atom_count; i++) {
-        if (strcmp(s_atoms[i].name, b) == 0) return s_atoms[i].id;
+        if (strcmp(s_atoms[i].name, b) == 0) { return s_atoms[i].id;
+        }
     }
-    if (c) return None;
+    if (c) { return None; }
     /* Create new */
     if (s_atom_count < MAX_ATOMS) {
         Atom id = 100 + s_atom_count;
@@ -1114,17 +1160,14 @@ XFontStruct* XLoadQueryFont(Display* a, const char* b) { return NULL; }
 KeySym XLookupKeysym(XKeyEvent* a, int b) {
     if (!a) return 0;
     unsigned int kc = *(unsigned int*)((unsigned char*)a + 84);
-    unsigned int st = *(unsigned int*)((unsigned char*)a + 80);
-    if (b == 1) st |= 0x01;
-    return keycode_to_keysym_with_state(kc, st);
+    return keycode_to_keysym(kc);
 }
 
 int XLookupString(XKeyEvent* a, char* b, int c, KeySym* d, XComposeStatus* e) {
     KeySym ks = 0;
     if (a) {
         unsigned int kc = *(unsigned int*)((unsigned char*)a + 84);
-        unsigned int st = *(unsigned int*)((unsigned char*)a + 80);
-        ks = keycode_to_keysym_with_state(kc, st);
+        ks = keycode_to_keysym(kc);
     }
     if (d) *d = ks;
     if (ks >= 0x20 && ks <= 0x7e && b && c > 0) {
@@ -1134,11 +1177,15 @@ int XLookupString(XKeyEvent* a, char* b, int c, KeySym* d, XComposeStatus* e) {
     return 0;
 }
 
-int XMapRaised(Display* a, Window b) {
+static void x11_enable_events(void) {
     if (s_x11_fd >= 0 && s_real_window == 0) {
         x11_create_and_map(s_screen.width, s_screen.height);
         s_events_ready = 1;
     }
+}
+
+int XMapRaised(Display* a, Window b) {
+    x11_enable_events();
     return 0;
 }
 
@@ -1155,8 +1202,6 @@ Status XMatchVisualInfo(Display* a, int screen, int depth, int c_class, XVisualI
         vinfo->blue_mask = 0x0000FF;
         vinfo->bits_per_rgb = 8;
     }
-    // stub_log("stubx11: XMatchVisualInfo(screen=%d, depth=%d, class=%d) Ok\n",
-    //         screen, depth, c_class);
     return 1;
 }
 
@@ -1166,22 +1211,20 @@ int XMoveWindow(Display* a, Window b, int c, int d) { return 0; }
 
 Display* XOpenDisplay(const char* display_name) {
     ensure_display_init();
-    stub_log("stubx11: XOpenDisplay('%s')\n", display_name ? display_name : ":0");
     if (s_x11_fd < 0) {
         x11_connect();
     }
     return &s_display;
 }
 
-Status XInitThreads(void) {
-    const char msg[] = "stubx11: XInitThreads called\n";
-    write(2, msg, sizeof(msg) - 1);
-    return 1;
+Status XInitThreads(void) { return 1;
 }
 
 int XPeekEvent(Display* a, XEvent* b) {
-    /* Block — shouldn't be called */
-    if (b) memset(b, 0, sizeof(*b));
+    if (!b) return 0;
+    if (s_events_ready) x11_drain_events();
+    if (s_eq_count > 0) memcpy(b, &s_eq[s_eq_head], XEVENT_REAL_SIZE);
+    else memset(b, 0, sizeof(*b));
     return 0;
 }
 
@@ -1190,7 +1233,6 @@ int XPending(Display* a) {
     if (!s_events_ready) return 0;
     x11_drain_events();
 /*    if (s_xpend_log < 5) {
-        stub_log("stubx11: XPending -> %d\n", s_eq_count);
         s_xpend_log++;
     }*/
     return s_eq_count;
@@ -1206,11 +1248,12 @@ int XQueryKeymap(Display* a, char b[32]) {
 
 Bool XQueryPointer(Display* a, Window b, Window* c, Window* d,
                    int* e, int* f, int* g, int* h, unsigned int* i) {
+    if (s_events_ready) x11_drain_events();
     if (c) *c = 0x1;
     if (d) *d = DUMMY_WINDOW;
-    if (e) *e = 0; if (f) *f = 0;
-    if (g) *g = 0; if (h) *h = 0;
-    if (i) *i = 0;
+    if (e) *e = s_ptr_x; if (f) *f = s_ptr_y;
+    if (g) *g = s_ptr_x; if (h) *h = s_ptr_y;
+    if (i) *i = s_btn_mask;
     return True;
 }
 
@@ -1221,7 +1264,8 @@ int XResizeWindow(Display* a, Window b, unsigned int c, unsigned int d) { return
 
 int XScreenNumberOfScreen(Screen* a) { return 0; }
 
-int XSelectInput(Display* a, Window b, long c) { return 0; }
+int XSelectInput(Display* a, Window b, long c) { return 0;
+}
 
 Status XSendEvent(Display* a, Window b, Bool c, long d, XEvent* e) { return 0; }
 
@@ -1241,21 +1285,28 @@ XIOErrorHandler XSetIOErrorHandler(XIOErrorHandler a) {
     return old;
 }
 
-int XSetInputFocus(Display *a, Window b, int c, Time d) { return 0; }
-int XSetSelectionOwner(Display* a, Atom b, Window c, Time d) { return 0; }
-int XSetTransientForHint(Display* a, Window b, Window c) { return 0; }
-void XSetTextProperty(Display* a, Window b, XTextProperty* c, Atom d) {}
-int XSetWindowBackground(Display* a, Window b, unsigned long c) { return 0; }
-void XSetWMHints(Display* a, Window b, XWMHints* c) {}
-void XSetWMNormalHints(Display* a, Window b, XSizeHints* c) {}
+int XSetInputFocus(Display *a, Window b, int c, Time d) { return 0;
+}
+int XSetSelectionOwner(Display* a, Atom b, Window c, Time d) { return 0;
+}
+int XSetTransientForHint(Display* a, Window b, Window c) { return 0;
+}
+void XSetTextProperty(Display* a, Window b, XTextProperty* c, Atom d) {
+}
+int XSetWindowBackground(Display* a, Window b, unsigned long c) { return 0;
+}
+void XSetWMHints(Display* a, Window b, XWMHints* c) {
+}
+void XSetWMNormalHints(Display* a, Window b, XSizeHints* c) {
+}
 void XSetWMProperties(Display* a, Window b, XTextProperty* c, XTextProperty* d,
-                      char** e, int f, XSizeHints* g, XWMHints* h, XClassHint* i) {}
-Status XSetWMProtocols(Display* a, Window b, Atom* c, int d) { return 1; }
+                      char** e, int f, XSizeHints* g, XWMHints* h, XClassHint* i) {
+}
+Status XSetWMProtocols(Display* a, Window b, Atom* c, int d) { return 1;
+}
 
 int XStoreColors(Display* a, Colormap b, XColor* c, int d) { return 0; }
-int XStoreName(Display* a, Window b, const char* c) {
-    // stub_log("stubx11: XStoreName('%s')\n", c ? c : "(null)");
-    return 0;
+int XStoreName(Display* a, Window b, const char* c) { return 0;
 }
 
 Status XStringListToTextProperty(char** a, int b, XTextProperty* c) {
@@ -1298,17 +1349,24 @@ int XWindowEvent(Display* a, Window b, long c, XEvent* d) {
 
 Status XWithdrawWindow(Display* a, Window b, int c) { return 1; }
 
-VisualID XVisualIDFromVisual(struct Visual* a) {
-    return a ? a->visualid : 0x21;
+VisualID XVisualIDFromVisual(struct Visual* a) { return a ? a->visualid : 0x21;
 }
 
 char* XGetDefault(Display* a, const char* b, const char* c) { return NULL; }
 
 Bool XQueryExtension(Display* a, const char* name, int* c, int* d, int* e) {
-    stub_log("stubx11: XQueryExtension('%s')\n", name ? name : "(null)");
     /* Fake GLX support */
     if (name && strcmp(name, "GLX") == 0) {
         if (c) *c = 152;
+        if (d) *d = 0;
+        if (e) *e = 0;
+        return True;
+    }
+    if (name && strcmp(name, "XInputExtension") == 0) {
+        const char *p2 = getenv("POLYDROID_POLYTORIA2");
+        if (!(p2 && p2[0] == '1'))
+            return False;
+        if (c) *c = 131;
         if (d) *d = 0;
         if (e) *e = 0;
         return True;
@@ -1323,13 +1381,12 @@ int XGetErrorText(Display* a, int b, char* c, int d) {
     return 0;
 }
 
-
-void _XEatData(Display* a, unsigned long b) {}
-void _XFlush(Display* a) {}
-void _XFlushGCCache(Display* a, GC b) {}
+void _XEatData(Display* a, unsigned long b) { }
+void _XFlush(Display* a) { }
+void _XFlushGCCache(Display* a, GC b) { }
 int _XRead(Display* a, char* b, long c) { return 0; }
-void _XReadPad(Display* a, char* b, long c) {}
-void _XSend(Display* a, const char* b, long c) {}
+void _XReadPad(Display* a, char* b, long c) { }
+void _XSend(Display* a, const char* b, long c) { }
 Status _XReply(Display* a, xReply* b, int c, Bool d) { return 0; }
 unsigned long _XSetLastRequestRead(Display* a, xGenericReply* b) { return 0; }
 typedef void (*_XLockMutexProc)(void*);
@@ -1356,23 +1413,22 @@ void* XESetFreeFont(Display* a, int b, void* c) { return NULL; }
 void* XESetFlushGC(Display* a, int b, void* c) { return NULL; }
 void* XESetError(Display* a, int b, void* c) { return NULL; }
 void* XESetErrorString(Display* a, int b, void* c) { return NULL; }
-void _XInitImageFuncPtrs(XImage* img) {}
+void _XInitImageFuncPtrs(XImage* img) { }
 void* _XAllocScratch(Display* a, unsigned long b) {
     static char scratch[4096];
     return scratch;
 }
-int _XGetBitsPerPixel(Display* a, int depth) {
-    return (depth <= 8) ? 8 : (depth <= 16) ? 16 : 32;
+int _XGetBitsPerPixel(Display* a, int depth) { return (depth <= 8) ? 8 : (depth <= 16) ? 16 : 32;
 }
 void* _XGetRequest(Display* a, int type, unsigned long len) { return NULL; }
 int _XGetScanlinePad(Display* a, int depth) { return 32; }
-void _XData32(Display* a, const void* b, unsigned int c) {}
+void _XData32(Display* a, const void* b, unsigned int c) { }
 int _XRead32(Display* a, void* b, long c) { return 0; }
 void* _XVIDtoVisual(Display* a, VisualID id) {
     if (id == s_visual.visualid) return &s_visual;
     return NULL;
 }
-void _XEatDataWords(Display* a, unsigned long b) {}
+void _XEatDataWords(Display* a, unsigned long b) { }
 void* XAddExtension(Display* a) { return NULL; }
 void* XInitExtension(Display* a, const char* name) { return NULL; }
 void* XFindOnExtensionList(void** a, int b) { return NULL; }
@@ -1389,7 +1445,7 @@ typedef Status (*EventToWireProc)(Display*, void*, void*);
 WireToEventProc XESetWireToEvent(Display* a, int b, WireToEventProc c) { return NULL; }
 EventToWireProc XESetEventToWire(Display* a, int b, EventToWireProc c) { return NULL; }
 
-void XRefreshKeyboardMapping(XMappingEvent *a) {}
+void XRefreshKeyboardMapping(XMappingEvent *a) { }
 
 int XQueryTree(Display* a, Window b, Window* c, Window* d, Window** e, unsigned int* f) {
     if (c) *c = 0x1; /* root */
@@ -1411,46 +1467,49 @@ Status XmbTextListToTextProperty(Display* a, char** b, int c, XICCEncodingStyle 
     return 0;
 }
 Bool XkbQueryExtension(Display* a, int *b, int *c, int *d, int *e, int *f) { return False; }
-KeySym XkbKeycodeToKeysym(Display* a, unsigned int b, int c, int d) {
-    return keycode_to_keysym_with_state(b, (d == 1) ? 0x01 : 0x00);
-}
+KeySym XkbKeycodeToKeysym(Display* a, unsigned int b, int c, int d) { return keycode_to_keysym(b); }
 Status XkbGetState(Display* a, unsigned int b, XkbStatePtr c) { return 0; }
 Status XkbGetUpdatedMap(Display* a, unsigned int b, XkbDescPtr c) { return 0; }
 XkbDescPtr XkbGetMap(Display* a, unsigned int b, unsigned int c) { return NULL; }
-void XkbFreeClientMap(XkbDescPtr a, unsigned int b, Bool c) {}
-void XkbFreeKeyboard(XkbDescPtr a, unsigned int b, Bool c) {}
+void XkbFreeClientMap(XkbDescPtr a, unsigned int b, Bool c) { }
+void XkbFreeKeyboard(XkbDescPtr a, unsigned int b, Bool c) { }
 Bool XkbSetDetectableAutoRepeat(Display* a, Bool b, Bool* c) { if (c) *c = b; return True; }
-KeySym XKeycodeToKeysym(Display* a, unsigned int b, int c) {
-    return keycode_to_keysym_with_state(b, (c == 1) ? 0x01 : 0x00);
-}
+KeySym XKeycodeToKeysym(Display* a, unsigned int b, int c) { return keycode_to_keysym(b); }
 PointerBarrier XFixesCreatePointerBarrier(Display* a, Window b, int c, int d, int e, int f,
                                           int g, int h, int *i) { return 0; }
-void XFixesDestroyPointerBarrier(Display* a, PointerBarrier b) {}
+void XFixesDestroyPointerBarrier(Display* a, PointerBarrier b) { }
 int XIBarrierReleasePointer(Display* a, int b, PointerBarrier c, BarrierEventID d) { return 0; }
 Status XFixesQueryVersion(Display* a, int* b, int* c) {
     if (b) *b = 0; if (c) *c = 0;
     return 0;
 }
 Status XFixesSelectSelectionInput(Display* a, Window b, Atom c, unsigned long d) { return 0; }
-Bool XGetEventData(Display* a, XGenericEventCookie* b) { return False; }
-void XFreeEventData(Display* a, XGenericEventCookie* b) {}
-int Xutf8TextListToTextProperty(Display* a, char** b, int c, XICCEncodingStyle d, XTextProperty* e) {
-    return XmbTextListToTextProperty(a, b, c, d, e);
+Bool XGetEventData(Display* a, XGenericEventCookie* b) {
+    unsigned char *p = (unsigned char *)b;
+    if (p && *(int*)(p+0) == 35 && *(int*)(p+32) == 131 && *(void**)(p+48)) return True;
+    return False;
+}
+void XFreeEventData(Display* a, XGenericEventCookie* b) {
+    unsigned char *p = (unsigned char *)b;
+    if (p && *(int*)(p+0) == 35 && *(int*)(p+32) == 131) {
+        void *d = *(void**)(p+48);
+        if (d) { free(d); *(void**)(p+48) = NULL; }
+    }
+}
+int Xutf8TextListToTextProperty(Display* a, char** b, int c, XICCEncodingStyle d, XTextProperty* e) { return XmbTextListToTextProperty(a, b, c, d, e);
 }
 int Xutf8LookupString(XIC a, XKeyPressedEvent* b, char* c, int d, KeySym* e, Status* f) {
     if (e) *e = 0;
     if (f) *f = 0;
     return 0;
 }
-void XDestroyIC(XIC a) {}
-void XSetICFocus(XIC a) {}
-void XUnsetICFocus(XIC a) {}
-XIM XOpenIM(Display* a, struct XrmHashBucketRec* b, char* c, char* d) {
-    stub_log("stubx11: XOpenIM is NULL\n");
-    return NULL;
+void XDestroyIC(XIC a) { }
+void XSetICFocus(XIC a) { }
+void XUnsetICFocus(XIC a) { }
+XIM XOpenIM(Display* a, struct XrmHashBucketRec* b, char* c, char* d) { return NULL;
 }
 Status XCloseIM(XIM a) { return 0; }
-void Xutf8DrawString(Display *a, Drawable b, XFontSet c, GC d, int e, int f, const char *g, int h) {}
+void Xutf8DrawString(Display *a, Drawable b, XFontSet c, GC d, int e, int f, const char *g, int h) { }
 int Xutf8TextExtents(XFontSet a, const char* b, int c, XRectangle* d, XRectangle* e) {
     if (d) memset(d, 0, sizeof(*d));
     if (e) memset(e, 0, sizeof(*e));
@@ -1466,11 +1525,7 @@ char* XGetICValues(XIC ic, ...) { return NULL; }
 Bool XShmQueryExtension(Display* a) { return False; }
 Bool XShmQueryVersion(Display* a, int* b, int* c, Bool* d) { return False; }
 int XMapWindow(Display* a, Window b) {
-    if (s_x11_fd >= 0 && s_real_window == 0) {
-        x11_create_and_map(s_screen.width, s_screen.height);
-        s_events_ready = 1;
-        // stub_log("stubx11: events enabled (via XMapWindow)\n");
-    }
+    x11_enable_events();
     return 0;
 }
 int XUnmapWindow(Display* a, Window b) { return 0; }
@@ -1490,7 +1545,55 @@ int XFreeExtensionList(char** a) {
 
 Window XRootWindow(Display* dpy, int screen) { return 0x1; }
 Window XDefaultRootWindow(Display* dpy) { return 0x1; }
-int XDefaultScreen(Display* dpy) { return 0; }
+#include <signal.h>
+#include <setjmp.h>
+
+static sigjmp_buf g_selftest_jmp;
+static void selftest_alarm(int sig) { (void)sig; siglongjmp(g_selftest_jmp, 1); }
+
+static void recursive_mutex_self_test(void) {
+    static int done = 0;
+    if (__atomic_exchange_n(&done, 1, __ATOMIC_SEQ_CST)) return;
+
+    long tid1 = (long)syscall(SYS_gettid);
+    unsigned long pself1 = (unsigned long)pthread_self();
+
+    pthread_mutexattr_t a;
+    pthread_mutex_t *m = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
+    pthread_mutexattr_init(&a);
+    pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
+    int ri = pthread_mutex_init(m, &a);
+    int set_type = 0;
+    pthread_mutexattr_gettype(&a, &set_type);
+    int r1 = pthread_mutex_trylock(m);
+    int r2 = pthread_mutex_trylock(m);
+    if (r2 == 0) pthread_mutex_unlock(m);
+    if (r1 == 0) pthread_mutex_unlock(m);
+    struct sigaction sa = { .sa_handler = selftest_alarm }, old_sa;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGALRM, &sa, &old_sa);
+
+    if (sigsetjmp(g_selftest_jmp, 1) == 0) {
+        alarm(3);
+        int l1 = pthread_mutex_lock(m);
+        long tidA = (long)syscall(SYS_gettid);
+        int l2 = pthread_mutex_lock(m);
+        long tidB = (long)syscall(SYS_gettid);
+        alarm(0);
+        if (l2 == 0) pthread_mutex_unlock(m);
+        if (l1 == 0) pthread_mutex_unlock(m);
+    } else {
+        alarm(0);
+    }
+    sigaction(SIGALRM, &old_sa, NULL);
+
+    pthread_mutex_destroy(m);
+    free(m);
+    pthread_mutexattr_destroy(&a);
+}
+
+int XDefaultScreen(Display* dpy) { return 0;
+}
 int XDefaultDepth(Display* dpy, int screen) { return 24; }
 struct Visual* XDefaultVisual(Display* dpy, int screen) { return &s_visual; }
 Colormap XDefaultColormap(Display* dpy, int screen) { return DUMMY_COLORMAP; }
@@ -1508,7 +1611,7 @@ int XWidthOfScreen(Screen* s) { return s ? s->width : 1280; }
 int XHeightOfScreen(Screen* s) { return s ? s->height : 1024; }
 
 void* XdbeGetVisualInfo(Display* a, Drawable* b, int* c, int* d) { return NULL; }
-void XdbeFreeVisualInfo(void* a) {}
+void XdbeFreeVisualInfo(void* a) { }
 int XAutoRepeatOn(Display* a) { return 0; }
 int XAutoRepeatOff(Display* a) { return 0; }
 typedef struct {
@@ -1526,4 +1629,20 @@ int XGetKeyboardControl(Display* dpy, XKeyboardState* state) {
     return 1;
 }
 
-// finally done
+typedef struct { int screen_number; short x_org, y_org, width, height; } XineramaScreenInfo;
+int XineramaQueryExtension(Display* dpy, int* event_base, int* error_base) {
+    if (event_base) *event_base = 0;
+    if (error_base) *error_base = 0;
+    return 0;
+}
+int XineramaQueryVersion(Display* dpy, int* major, int* minor) {
+    if (major) *major = 1;
+    if (minor) *minor = 1;
+    return 1;
+}
+int XineramaIsActive(Display* dpy) { return 0;
+}
+XineramaScreenInfo* XineramaQueryScreens(Display* dpy, int* number) {
+    if (number) *number = 0;
+    return NULL;
+}

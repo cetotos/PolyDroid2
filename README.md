@@ -4,7 +4,7 @@
 
 # PolyDroid 2
 
-[![Discord](https://img.shields.io/discord/1495088499383210226?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/MwHShrt5m)
+[![Discord](https://img.shields.io/discord/1495088499383210226?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/9NK3zUVkZv)
 
 PolyDroid 2 is an updated, more native rewrite of PolyDroid, which runs the Polytoria Client on Android.
 While PolyDroid ran the game with the Windows client, using multiple translation layers like DXVK and Wine, PolyDroid 2 uses the Linux client and only 1 translation layer being [Box64](https://github.com/ptitSeb/box64) to translate x86-64 to ARM64.
@@ -14,7 +14,8 @@ While PolyDroid ran the game with the Windows client, using multiple translation
 1. Download and install the APK from [GitHub Releases](https://github.com/cetotos/PolyDroid2/releases/latest)
 2. Launch the app and login *(it will be logged in already if you have logged in on Chrome before)*
 3. You will need to wait a bit for rootfs and client to extract and deploy.
-4. Launch any 1.0 game and lower Polytoria graphics settings
+4. Change the settings however you want
+5. Launch any 1.0 or 2.0 game (2.0 recommended)
 
 ## FAQ
 
@@ -40,21 +41,15 @@ Over time more patches should come out, but it is still very fragile and you sti
 
 ### Why is it so slow?
 
-To optimize the game, go to Polytoria graphics settings and:
+To optimize the game, you can lower the graphics settings either in-game or in the in-app settings menu.
 
-- Disable V-Sync
-- Disable post-processing
-- If disabling V-Sync ends up tanking performance, try toggling fullscreen *(it will "refresh" the Surface)*
+Because Unity's Vulkan support is bad and Polytoria itself doesnt have a render distance, looking at a lot of 3D objects in 1.0, even if not visible on screen will tank performance. Heavy games with high part counts will run poorly!
 
-You can also lower quality of everything else, but they don't do much of a difference
+### ~~Will this have 2.0 support?~~ Why not just wait for the real mobile release?
 
-Because Unity's Vulkan support is bad and Polytoria itself doesnt have a render distance, looking at a lot of 3D objects, even if not visible on screen will tank performance. Heavy games with high part counts will run poorly!
+*~~Currently, due to Box64's internal architecture being incompatible with NativeAOT (What Godot/2.0 client uses) PolyDroid will probably not have 2.0 support.~~*
 
-### Will this have 2.0 support? Why not just wait for the real mobile release?
-
-Currently, due to Box64's internal architecture being incompatible with NativeAOT (What Godot/2.0 client uses) PolyDroid will probably not have 2.0 support.
-
-When 2.0 does come out and eventually gets mobile, PolyDroid 2 will still be used to run the 1.0 client on mobile.
+**PolyDroid 2 now has 2.0 support!** You can enter any 2.0 game and it will download automatically. It is pretty new, so you may encounter issues. If you do, report them in the issues tab.
 
 ### Credits
 

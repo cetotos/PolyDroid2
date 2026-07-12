@@ -63,6 +63,10 @@ class TouchControlOverlay(
         val radiusDp: Float,
         layout: SettingsActivity.OverlayButton,
         density: Float,
+        val color: Int = SettingsActivity.DEFAULT_KEY_COLOR,
+        val shape: String = SettingsActivity.SHAPE_CIRCLE,
+        val opacity: Float = 1f,
+        val textScale: Float = 1f,
     ) {
         val scale = layout.scale
         val xFrac = layout.xFrac
@@ -96,6 +100,10 @@ class TouchControlOverlay(
             ck.scanCode, ck.label, ck.toggle, CUSTOM_RADIUS_DP,
             SettingsActivity.OverlayButton(ck.xFrac, ck.yFrac, ck.scale),
             density,
+            color = ck.color,
+            shape = ck.shape,
+            opacity = ck.opacity,
+            textScale = ck.textScale,
         )
     }
     private val keyButtons = listOf(sprintBtn) + customBtns
@@ -188,16 +196,17 @@ class TouchControlOverlay(
         style = Paint.Style.FILL
         isAntiAlias = true
     }
-    private val keyFillActivePaint = Paint().apply {
-        color = Color.argb(160, 255, 255, 255)
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
     private val keyLabelPaint = Paint().apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
         isAntiAlias = true
     }
+    private val keyStrokePaint = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * density
+        isAntiAlias = true
+    }
+    private val keyShapeRect = RectF()
 
     private val arcInactivePaint = Paint().apply {
         color = Color.argb(30, 255, 255, 255)
@@ -651,10 +660,27 @@ class TouchControlOverlay(
 
         for (b in keyButtons) {
             val isActive = if (b.toggle) b.toggleActive else b.pointerId != -1
-            canvas.drawCircle(b.cx, b.cy, b.radius, if (isActive) keyFillActivePaint else keyFillPaint)
-            canvas.drawCircle(b.cx, b.cy, b.radius, joystickOutlinePaint)
-            keyLabelPaint.textSize = b.radius * 0.7f
-            canvas.drawText(b.label, b.cx, b.cy + keyLabelPaint.textSize / 3f, keyLabelPaint)
+            val cr = Color.red(b.color); val cg = Color.green(b.color); val cb = Color.blue(b.color)
+            keyFillPaint.color = Color.argb(((if (isActive) 160 else 60) * b.opacity).toInt(), cr, cg, cb)
+            keyStrokePaint.color = Color.argb((80 * b.opacity).toInt().coerceAtLeast(25), cr, cg, cb)
+            if (b.shape == SettingsActivity.SHAPE_SQUARE) {
+                keyShapeRect.set(b.cx - b.radius, b.cy - b.radius, b.cx + b.radius, b.cy + b.radius)
+                val corner = b.radius * 0.25f
+                canvas.drawRoundRect(keyShapeRect, corner, corner, keyFillPaint)
+                canvas.drawRoundRect(keyShapeRect, corner, corner, keyStrokePaint)
+            } else {
+                canvas.drawCircle(b.cx, b.cy, b.radius, keyFillPaint)
+                canvas.drawCircle(b.cx, b.cy, b.radius, keyStrokePaint)
+            }
+            if (b.label.isNotEmpty()) {
+                keyLabelPaint.color = Color.argb((255 * b.opacity).toInt().coerceAtLeast(60), 255, 255, 255)
+                keyLabelPaint.textSize = b.radius * 0.7f
+                val tw = keyLabelPaint.measureText(b.label)
+                val maxW = b.radius * 1.8f
+                if (tw > maxW) keyLabelPaint.textSize *= maxW / tw
+                keyLabelPaint.textSize *= b.textScale
+                canvas.drawText(b.label, b.cx, b.cy + keyLabelPaint.textSize / 3f, keyLabelPaint)
+            }
         }
     }
 }

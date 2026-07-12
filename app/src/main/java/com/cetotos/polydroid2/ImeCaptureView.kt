@@ -23,6 +23,7 @@ class ImeCaptureView @JvmOverloads constructor(
     }
 
     private var internalChange = false
+    private var lastText = FILLER
     var sendKey: ((scanCode: Int, keyCode: Int, down: Boolean) -> Unit)? = null
     private val kbExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
         Thread(r, "polykbd").apply { isDaemon = true }
@@ -103,43 +104,57 @@ class ImeCaptureView @JvmOverloads constructor(
         e?.clear()
         e?.append(FILLER)
         if (e != null) Selection.setSelection(e, FILLER.length)
+        lastText = FILLER
         internalChange = false
     }
 
-    private fun dispatchChar(c: Char) {
+    private fun syncFromBuffer(newText: String) {
+        val old = lastText
+        if (newText == old) return
+
+        var p = 0
+        val maxPrefix = minOf(old.length, newText.length)
+        while (p < maxPrefix && old[p] == newText[p]) p++
+        var sfx = 0
+        while (sfx < old.length - p && sfx < newText.length - p &&
+            old[old.length - 1 - sfx] == newText[newText.length - 1 - sfx]) sfx++
+
+        val removed = old.length - p - sfx
+        val added = newText.substring(p, newText.length - sfx)
+        lastText = newText
+        sendEdit(removed, added)
+
+        if (newText.length < FILLER.length) clearBuf()
+    }
+
+    private fun sendEdit(backspaces: Int, added: String) {
         val cb = sendKey ?: return
-        val kcm = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
-        val events = kcm.getEvents(charArrayOf(c)) ?: return
+        if (backspaces <= 0 && added.isEmpty()) return
         kbExecutor.execute {
-            for (e in events) {
-                cb(e.scanCode, e.keyCode, e.action == KeyEvent.ACTION_DOWN)
+            repeat(backspaces) {
+                cb(0, KeyEvent.KEYCODE_DEL, true)
+                cb(0, KeyEvent.KEYCODE_DEL, false)
                 try { Thread.sleep(25) } catch (_: InterruptedException) {}
+            }
+            if (added.isNotEmpty()) {
+                val kcm = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
+                for (c in added) {
+                    val events = kcm.getEvents(charArrayOf(c)) ?: continue
+                    for (e in events) {
+                        cb(e.scanCode, e.keyCode, e.action == KeyEvent.ACTION_DOWN)
+                        try { Thread.sleep(25) } catch (_: InterruptedException) {}
+                    }
+                }
             }
         }
     }
 
     private inner class Watcher : TextWatcher {
         override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
-        override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
-            if (internalChange) return
-            if (count > 0) {
-                var i = start
-                var n = 0
-                while (n < count) {
-                    dispatchChar(s[i])
-                    i++; n++
-                }
-            } else if (before > 0) {
-                val cb = sendKey
-                if (cb != null) repeat(before) {
-                    cb(0, KeyEvent.KEYCODE_DEL, true)
-                    cb(0, KeyEvent.KEYCODE_DEL, false)
-                }
-            }
-        }
+        override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {}
         override fun afterTextChanged(e: Editable) {
             if (internalChange) return
-            if (e.length < 1) clearBuf()
+            syncFromBuffer(e.toString())
         }
     }
 }

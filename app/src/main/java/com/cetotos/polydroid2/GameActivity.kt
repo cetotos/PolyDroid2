@@ -11,13 +11,14 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -33,9 +34,7 @@ import kotlin.concurrent.thread
 
 class GameActivity : AppCompatActivity() {
 
-    private lateinit var logView: TextView
-    private lateinit var scrollView: ScrollView
-    private lateinit var statsView: TextView
+    private lateinit var statsView: StatsOverlayView
     private lateinit var lorieView: LorieView
     private lateinit var imeCapture: ImeCaptureView
     private lateinit var vulkanSurface: SurfaceView
@@ -48,6 +47,7 @@ class GameActivity : AppCompatActivity() {
     @Volatile private var vulkanSurfaceReady = false
     @Volatile private var crashDialogShown = false
     @Volatile private var overheatDialogShown = false
+    private var exitDialogShown = false
     private var lastThermalStatus = 0
     private val thermalBannerHideRunnable = Runnable {
         if (::thermalBanner.isInitialized) thermalBanner.visibility = android.view.View.GONE
@@ -57,9 +57,7 @@ class GameActivity : AppCompatActivity() {
     }
 
     private val statsHandler = Handler(Looper.getMainLooper())
-    private var statsUpdateCount = 0
-    private var lastCpuIdle = 0L
-    private var lastCpuTotal = 0L
+    private val systemStats = SystemStats()
     private var renderWidth = 0
     private var renderHeight = 0
     private var startTimeMs = 0L
@@ -172,41 +170,52 @@ class GameActivity : AppCompatActivity() {
         ))
 
         // touch controls
-        val touchOverlay = TouchControlOverlay(
-            context = this,
-            renderWidth = renderWidth,
-            renderHeight = renderHeight,
-            sendInput = { type, button, x, y -> nativeSendInputEvent(type, button, x, y) },
-            sendKey = { scanCode, keyCode, down -> nativeSendKeyEvent(scanCode, keyCode, down) },
-            cameraSensitivity = SettingsActivity.getCameraSensitivity(this),
-        )
-        frame.addView(touchOverlay, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
+        if (RootFs.isPolytoria2(this)) {
+            val touchLayer = CustomKeysOverlay(
+                this, renderWidth, renderHeight,
+                sendKey = { scan, down -> nativeSendKeyEvent(scan, 0, down) },
+                sendTouch = { type, id, x, y -> nativeSendInputEvent(type, id, x, y) },
+            )
+            frame.addView(touchLayer, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        } else {
+            val touchOverlay = TouchControlOverlay(
+                context = this,
+                renderWidth = renderWidth,
+                renderHeight = renderHeight,
+                sendInput = { type, button, x, y -> nativeSendInputEvent(type, button, x, y) },
+                sendKey = { scanCode, keyCode, down -> nativeSendKeyEvent(scanCode, keyCode, down) },
+                cameraSensitivity = SettingsActivity.getCameraSensitivity(this),
+            )
+            frame.addView(touchOverlay, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        }
 
-        scrollView = ScrollView(this)
-        logView = TextView(this).apply {
-            setPadding(0, 0, 0, 0)
-            textSize = 1f
+        statsView = StatsOverlayView(this).apply {
+            configure(
+                SettingsActivity.getStatsEnabledOrdered(this@GameActivity),
+                SettingsActivity.getStatsSizeScale(this@GameActivity),
+                SettingsActivity.getStatsOpacity(this@GameActivity),
+            )
         }
-        scrollView.addView(logView)
-        scrollView.visibility = android.view.View.GONE
-        frame.addView(scrollView)
-        statsView = TextView(this).apply {
-            setPadding(12, 6, 12, 6)
-            textSize = 9f
-            typeface = android.graphics.Typeface.MONOSPACE
-            setTextColor(0xFFFFFFFF.toInt())
-            setBackgroundColor(0x99000000.toInt())
-            setShadowLayer(2f, 1f, 1f, 0xFF000000.toInt())
-            isClickable = false
-            isFocusable = false
-        }
+        val statsMargin = dp(8)
+        val statsPosition = SettingsActivity.getStatsPosition(this)
         val statsParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply { gravity = Gravity.TOP or Gravity.START }
+        ).apply {
+            gravity = when (statsPosition) {
+                StatsOverlayView.POS_TR -> Gravity.TOP or Gravity.END
+                StatsOverlayView.POS_BL -> Gravity.BOTTOM or Gravity.START
+                StatsOverlayView.POS_BR -> Gravity.BOTTOM or Gravity.END
+                else -> Gravity.TOP or Gravity.START
+            }
+            setMargins(statsMargin, statsMargin, statsMargin, statsMargin)
+        }
         frame.addView(statsView, statsParams)
 
         if (!SettingsActivity.getShowStats(this)) {
@@ -266,6 +275,9 @@ class GameActivity : AppCompatActivity() {
 
         setContentView(frame)
 
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = confirmExit()
+        })
 
         statsHandler.post(statsRunnable)
         if (savedInstanceState != null) {
@@ -348,7 +360,7 @@ class GameActivity : AppCompatActivity() {
 
             appendLog("Launching Box64...")
             try {
-                Box64Launcher.launch(
+                val proc = Box64Launcher.launch(
                     this, tmpDir, fullArgs, renderWidth, renderHeight,
                     onLog = { line -> appendLog(line) },
                     onExit = { code ->
@@ -359,6 +371,7 @@ class GameActivity : AppCompatActivity() {
                         }
                     }
                 )
+                systemStats.setGamePid(pidOf(proc))
             } catch (e: Exception) {
                 appendLog("Error! ${e.message}")
                 e.printStackTrace()
@@ -369,6 +382,11 @@ class GameActivity : AppCompatActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
         val scanCode = event.scanCode
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            return super.dispatchKeyEvent(event)
+        }
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (event.repeatCount == 0) {
@@ -406,16 +424,32 @@ class GameActivity : AppCompatActivity() {
         try {
             (getSystemService(POWER_SERVICE) as PowerManager).removeThermalStatusListener(thermalListener)
         } catch (_: Exception) {}
+        wakeLock?.let { if (it.isHeld) it.release() }
         if (isFinishing) {
             Box64Launcher.stop()
             AudioBridge.stop()
-            ClientProxy.stop()
+            android.os.Process.killProcess(android.os.Process.myPid())
         }
-        wakeLock?.let { if (it.isHeld) it.release() }
     }
 
     private fun toggleSoftKeyboard() {
         imeCapture.switchKeyboardState()
+    }
+
+    private fun confirmExit() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N && isInPictureInPictureMode) {
+            finish()
+            return
+        }
+        if (exitDialogShown) return
+        exitDialogShown = true
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Exit game?")
+            .setMessage("This closes the Polytoria client and returns to the app.")
+            .setPositiveButton("Exit") { _, _ -> finish() }
+            .setNegativeButton("Cancel", null)
+            .setOnDismissListener { exitDialogShown = false }
+            .show()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -461,27 +495,18 @@ class GameActivity : AppCompatActivity() {
             .create()
 
         sendBtn.setOnClickListener {
-            MaterialAlertDialogBuilder(this)
-                .setTitle("Send logs?")
-                .setMessage("This will send your app logs and Unity logs to the developer which helps to fix bugs. No personal info will be included in logs.")
-                .setPositiveButton("Send") { _, _ ->
-                    sendBtn.isEnabled = false
-                    sendBtn.text = "Sending..."
-                    SettingsActivity.sendLogsStatic(
-                        this,
-                        extraInfo = "box64 exit code=$exitCode",
-                        onProgress = { s -> runOnUiThread { sendBtn.text = s } },
-                        onDone = { _, m ->
-                            runOnUiThread {
-                                Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
-                                sendBtn.isEnabled = true
-                                sendBtn.text = "Send logs"
-                            }
-                        }
-                    )
+            LogReporter.promptAndSend(
+                this,
+                note = "box64 exit code=$exitCode",
+                onProgress = { s -> runOnUiThread { sendBtn.isEnabled = false; sendBtn.text = s } },
+                onDone = { _, m ->
+                    runOnUiThread {
+                        Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
+                        sendBtn.isEnabled = true
+                        sendBtn.text = "Send logs"
+                    }
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
+            )
         }
 
         websiteBtn.setOnClickListener {
@@ -493,6 +518,7 @@ class GameActivity : AppCompatActivity() {
     }
 
     private fun onThermalStatusChanged(status: Int) {
+        if (!SettingsActivity.isOverheatProtectionEnabled(this)) return
         if (status >= PowerManager.THERMAL_STATUS_EMERGENCY) {
             showOverheatDialog()
         } else if (status == PowerManager.THERMAL_STATUS_CRITICAL
@@ -612,106 +638,42 @@ class GameActivity : AppCompatActivity() {
     private val statsRunnable = object : Runnable {
         override fun run() {
             updateStatsOverlay()
-            statsUpdateCount++
             statsHandler.postDelayed(this, 1000)
         }
     }
 
     private fun updateStatsOverlay() {
-        val unityFps = nativeGetUnityFps()
-        val compFps = nativeGetCompositorFps()
-        val medianFps = nativeGetMedianFps()
-        val totalFrames = nativeGetTotalFrames()
-        val cpuUsage = getCpuUsage()
-        val gpuUsage = getGpuUsage()
-        val cpuTemp = getCpuTemp()
-        val gpuTemp = getGpuTemp()
+        if (statsView.visibility != View.VISIBLE) return
         val mem = getMemoryInfo()
-        val gpuName = getGpuName()
-        val vulkanInfo = nativeGetVulkanInfo()
-
-        val usedMb = mem.first / (1024 * 1024)
-        val totalMb = mem.second / (1024 * 1024)
-        val ramPct = if (mem.second > 0) (mem.first * 100 / mem.second).toInt() else 0
-
-        val sb = StringBuilder()
-        sb.appendLine("Unity: $unityFps FPS | Median: $medianFps FPS")
-        sb.appendLine("Frames: $totalFrames")
-        sb.appendLine("GPU: $gpuName | Usage: ${if (gpuUsage >= 0) "$gpuUsage%" else "N/A"}")
-        if (gpuTemp > 0) sb.appendLine("  GPU Temp: ${gpuTemp}\u00B0C")
-        sb.appendLine("CPU: ${if (cpuUsage >= 0) "$cpuUsage%" else "N/A"} | Temp: ${if (cpuTemp > 0) "${cpuTemp}\u00B0C" else "N/A"}")
-        sb.appendLine("RAM: ${usedMb}MB / ${totalMb}MB ($ramPct%)")
-        sb.appendLine("Res: ${renderWidth}x${renderHeight}")
-        if (vulkanInfo.isNotEmpty()) sb.append("Vulkan: $vulkanInfo")
-
-        statsView.text = sb.toString()
+        statsView.update(StatsOverlayView.Metrics(
+            unityFps = nativeGetUnityFps(),
+            totalFrames = nativeGetTotalFrames(),
+            gpuName = getGpuName(),
+            gpuUsage = systemStats.gpuUsage(),
+            gpuTemp = systemStats.gpuTemp(),
+            cpuUsage = systemStats.cpuUsage(),
+            cpuTemp = systemStats.cpuTemp(),
+            usedMb = mem.first / (1024 * 1024),
+            totalMb = mem.second / (1024 * 1024),
+            ramPct = if (mem.second > 0) (mem.first * 100 / mem.second).toInt() else 0,
+            ramInGb = SettingsActivity.getStatsRamInGb(this),
+            renderWidth = renderWidth,
+            renderHeight = renderHeight,
+            battery = getBatteryPercent(),
+            uptimeMs = System.currentTimeMillis() - startTimeMs,
+            vulkanInfo = nativeGetVulkanInfo(),
+        ))
     }
 
-    private fun getCpuUsage(): Int {
+    private fun pidOf(p: Process): Int {
+        try {
+            val f = p.javaClass.getDeclaredField("pid")
+            f.isAccessible = true
+            return f.getInt(p)
+        } catch (_: Exception) {}
         return try {
-            val line = File("/proc/stat").readLines().first { it.startsWith("cpu ") }
-            val parts = line.split("\\s+".toRegex()).drop(1).map { it.toLong() }
-            val idle = parts[3] + parts.getOrElse(4) { 0L }
-            val total = parts.sum()
-            val diffIdle = idle - lastCpuIdle
-            val diffTotal = total - lastCpuTotal
-            lastCpuIdle = idle
-            lastCpuTotal = total
-            if (diffTotal == 0L) 0 else ((diffTotal - diffIdle) * 100 / diffTotal).toInt()
+            (Process::class.java.getMethod("pid").invoke(p) as Long).toInt()
         } catch (_: Exception) { -1 }
-    }
-
-    private fun getGpuUsage(): Int {
-        return try {
-            val text = File("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage").readText().trim()
-            text.replace("%", "").trim().toInt()
-        } catch (_: Exception) {
-            try {
-                val parts = File("/sys/class/kgsl/kgsl-3d0/gpubusy").readText().trim()
-                    .split("\\s+".toRegex())
-                if (parts.size >= 2) {
-                    val busy = parts[0].toLong()
-                    val total = parts[1].toLong()
-                    if (total > 0) (busy * 100 / total).toInt() else -1
-                } else -1
-            } catch (_: Exception) { -1 }
-        }
-    }
-
-    private fun getGpuFreqMHz(): Int {
-        return try {
-            (File("/sys/class/kgsl/kgsl-3d0/gpuclk").readText().trim().toLong() / 1_000_000).toInt()
-        } catch (_: Exception) {
-            try {
-                (File("/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq").readText().trim().toLong() / 1_000_000).toInt()
-            } catch (_: Exception) { -1 }
-        }
-    }
-
-    private fun getCpuTemp(): Int {
-        for (i in 0..30) {
-            try {
-                val type = File("/sys/class/thermal/thermal_zone$i/type").readText().trim().lowercase()
-                if (type.contains("cpu") || type == "tsens_tz_sensor1" || type == "soc_thermal") {
-                    val raw = File("/sys/class/thermal/thermal_zone$i/temp").readText().trim().toInt()
-                    return if (raw > 1000) raw / 1000 else raw
-                }
-            } catch (_: Exception) { continue }
-        }
-        return -1
-    }
-
-    private fun getGpuTemp(): Int {
-        for (i in 0..30) {
-            try {
-                val type = File("/sys/class/thermal/thermal_zone$i/type").readText().trim().lowercase()
-                if (type.contains("gpu") || type.contains("gpuss")) {
-                    val raw = File("/sys/class/thermal/thermal_zone$i/temp").readText().trim().toInt()
-                    return if (raw > 1000) raw / 1000 else raw
-                }
-            } catch (_: Exception) { continue }
-        }
-        return -1
     }
 
     private fun getMemoryInfo(): Pair<Long, Long> {
@@ -740,33 +702,11 @@ class GameActivity : AppCompatActivity() {
         }
     }
 
-    private fun getPerCoreCpuFreqs(): String {
-        val freqs = mutableListOf<String>()
-        for (i in 0..7) {
-            try {
-                val freq = File("/sys/devices/system/cpu/cpu$i/cpufreq/scaling_cur_freq")
-                    .readText().trim().toLong() / 1000
-                freqs.add("${freq}MHz")
-            } catch (_: Exception) { break }
-        }
-        return freqs.joinToString(", ")
-    }
-
-    private fun formatUptime(ms: Long): String {
-        val totalSec = ms / 1000
-        val h = totalSec / 3600
-        val m = (totalSec % 3600) / 60
-        val s = totalSec % 60
-        return if (h > 0) "${h}h ${m}m ${s}s" else "${m}m ${s}s"
-    }
-
     private external fun nativeGetWindow(surface: Surface): Long
     private external fun nativeStartX11Bridge(realPath: String, rootfsPath: String): Boolean
     private external fun nativeStartFrameCompositor(surface: Surface): Boolean
-    private external fun nativeGetCompositorFps(): Int
     private external fun nativeGetUnityFps(): Int
     private external fun nativeGetTotalFrames(): Int
-    private external fun nativeGetMedianFps(): Int
     private external fun nativeGetVulkanInfo(): String
     private external fun nativeSendInputEvent(type: Int, button: Int, x: Int, y: Int)
     private external fun nativeSendKeyEvent(scanCode: Int, keyCode: Int, keyDown: Boolean)

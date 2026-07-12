@@ -18,6 +18,7 @@ object Box64Launcher {
         require(polytoria.exists()) { "Polytoria binary not found at ${polytoria.absolutePath}" }
         val box64 = File(nativeDir, "libbox64.so")
         require(box64.exists()) { "Box64 binary not found at ${box64.absolutePath}" }
+        File("$rootPath/usr/lib/arm64-native/libvulkan.so.1").delete()
         File(root, "polytoria/libdecor-0.so.0").delete()
         File(root, "polytoria/libdecor-cairo.so").delete()
         File(root, "polytoria/unity.lock").delete()
@@ -92,32 +93,27 @@ object Box64Launcher {
                 Log.w(TAG, "No certs found at /system/etc/security/cacerts")
             }
         }
-        // append proxy ca so the game trusts ClientProxt
-        try {
-            val proxyCa = ctx.assets.open("proxy_ca.crt").use { it.readBytes().toString(Charsets.UTF_8) }
-            val current = caBundle.readText()
-            if (!current.contains("PolyDroid2 Local Proxy CA")) {
-                caBundle.appendText("\n" + proxyCa)
-                Log.i(TAG, "appended proxy ca to ca-certificates.crt")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "failed to append proxy ca: ${e.message}")
-        }
+        val isPolytoria2 = RootFs.isPolytoria2(ctx)
 
-        // start ClientProxy to fix connection
-        val proxyPort = ClientProxy.start(ctx)
-        val polytoriaIp: String = try {
-            java.net.InetAddress.getAllByName("api.polytoria.com")
-                .firstOrNull { it is java.net.Inet4Address }?.hostAddress ?: ""
-        } catch (e: Exception) {
-            Log.w(TAG, "could not resolve api.polytoria.com for redirect: ${e.message}")
-            ""
+        if (isPolytoria2) {
+            // enable Polytoria's own touchscreen support and embed subwindows so they stay in the main viewport
+            try {
+                File("$rootPath/polytoria/override.cfg").writeText(
+                    "_custom_features=\"touchscreen\"\n\n" +
+                    "[debug]\n\nsettings/stdout/verbose_stdout=false\n\n" +
+                    "[display]\n\nwindow/subwindows/embed_subwindows=true\n\n" +
+                    "[input_devices]\n\npointing/emulate_touch_from_mouse=true\n"
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to write override.cfg: ${e.message}")
+            }
         }
 
         val arm64NativeDir = File("$rootPath/usr/lib/arm64-native")
         val libDir = File("$rootPath/usr/lib/aarch64-linux-gnu")
         val x86LibDir = File("$rootPath/usr/lib/x86_64-linux-gnu")
 
+        val safeMode = SettingsActivity.isSafeMode(ctx)
         val env = buildMap {
             put("HOME", "$rootPath/home/user")
             put("USER", "user")
@@ -144,43 +140,61 @@ object Box64Launcher {
                 "libXfixes.so.3:libXrender.so.1:" +
                 "libasound.so.2:" +
                 "libpulse.so.0:libpulse-simple.so.0:" +
-                "libdbus-1.so.3:" +
                 "librt.so.1")
 
-            var ldPreload = ""
-            ldPreload = "$rootPath/usr/lib/x86_64-linux-gnu/libpath_remap.so:$rootPath/polytoria/libunity_crash_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libsysconf_fix.so:$rootPath/usr/lib/x86_64-linux-gnu/libdns_resolver.so:$rootPath/usr/lib/x86_64-linux-gnu/libfmod_sched.so:$rootPath/usr/lib/x86_64-linux-gnu/libconnect_redirect.so:$ldPreload"
-            put("BOX64_LD_PRELOAD", ldPreload.trimEnd(':'))
+            val x86Pre = "$rootPath/usr/lib/x86_64-linux-gnu"
+            val ldPreload = listOf(
+                "$x86Pre/libeaccess_shim.so",
+                "$x86Pre/libpthread_recursive_fix.so",
+                "$x86Pre/libgodot_ctype_patch.so",
+                "$x86Pre/libctype_fix.so",
+                "$x86Pre/libdns_resolver.so",
+                "$x86Pre/libconnect_redirect.so"
+            ).joinToString(":")
+            put("BOX64_LD_PRELOAD", ldPreload)
             put("BOX64_LOG", "1") // level 2 will give WAY too much do not use it the Player.log ends up being GIGABYTES big
             put("BOX64_SHOWSEGV", "1")
             put("BOX64_SHOWBT", "1")
             put("BOX64_DLSYM_ERROR", "0")   // reduces log spam from missing symbols
             put("BOX64_CRASHHANDLER", "1")
-            // optimizations
-            val safeMode = SettingsActivity.isSafeMode(ctx)
             put("BOX64_DYNAREC", "1")
-            put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else "2")
-            put("BOX64_DYNAREC_STRONGMEM", if (safeMode) "1" else "0")
-            put("BOX64_DYNAREC_FASTNAN", if (safeMode) "0" else "1")
-            put("BOX64_DYNAREC_FASTROUND", if (safeMode) "0" else "1")
-            put("BOX64_DYNAREC_SAFEFLAGS", if (safeMode) "1" else "0")
-            put("BOX64_DYNAREC_CALLRET", if (safeMode) "0" else "1")
-            put("BOX64_DYNAREC_SEP", "2")
-            put("BOX64_DYNAREC_ALIGNED_ATOMICS", "1")
-            put("BOX64_DYNAREC_BLEEDING_EDGE", if (safeMode) "0" else "1")
-            put("BOX64_DYNAREC_WAIT", "0")
-            put("BOX64_DYNAREC_THP", "1")
-            put("BOX64_DYNAREC_HOTPAGE", if (safeMode) "0" else "2")
-            put("BOX64_DYNAREC_NATIVEFLAGS", if (safeMode) "0" else "1")
-            put("BOX64_DYNAREC_FORWARD", if (safeMode) "0" else "512")
-            put("BOX64_DYNAREC_PAUSE", "1")
-            put("BOX64_DYNAREC_DIRTY", if (safeMode) "0" else "1")  // DIRTY 2 is slower by around 20-30 FPS, use 1 instead
-            put("BOX64_DYNACACHE", if (safeMode) "0" else "1")
-            put("BOX64_MAXCPU", "4")
+            if (isPolytoria2) {
+                put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else "2")
+                put("BOX64_DYNAREC_STRONGMEM", if (safeMode) "2" else "1")
+                put("BOX64_DYNAREC_WEAKBARRIER", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_FASTNAN", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_FASTROUND", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_SAFEFLAGS", if (safeMode) "2" else "1")
+                put("BOX64_DYNAREC_CALLRET", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_SEP", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_FORWARD", if (safeMode) "128" else "1024")
+                put("BOX64_DYNAREC_ALIGNED_ATOMICS", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_PAUSE", "1")
+                put("BOX64_DYNAREC_WAIT", "1")
+                put("BOX64_DYNAREC_DIRTY", if (safeMode) "0" else "1")
+            } else {
+                put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_STRONGMEM", "1")
+                put("BOX64_DYNAREC_FASTNAN", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_FASTROUND", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_SAFEFLAGS", "1")
+                put("BOX64_DYNAREC_CALLRET", if (safeMode) "0" else "1")
+                put("BOX64_DYNAREC_SEP", if (safeMode) "1" else "2")
+                put("BOX64_DYNAREC_FORWARD", if (safeMode) "128" else "512")
+                put("BOX64_DYNAREC_ALIGNED_ATOMICS", "1")
+                put("BOX64_DYNAREC_WAIT", "0")
+                put("BOX64_DYNAREC_DIRTY", "0")
+            }
+            put("BOX64_DYNAREC_BLEEDING_EDGE", "0")
+            put("BOX64_DYNAREC_NATIVEFLAGS", "1")
+            put("BOX64_DYNACACHE", "0")
             put("BOX64_NORCFILES", "1")
             put("BOX64_ALLOWMISSINGLIBS", "1")
             put("BOX64_MMAP32", "0")
-            put("BOX64_AVX", if (safeMode) "1" else "2")
-            if (safeMode) Log.i(TAG, "box64 Safe mode active!")
+            put("BOX64_AVX", "2")
+            put("BOX64_AES", "0")
+            put("BOX64_PCLMULQDQ", "0")
+            put("BOX64_SHAEXT", "0")
             // rootfs
             put("POLYDROID_ROOTDIR", rootPath)
             put("POLYDROID_NATIVE_DIR", nativeDir)
@@ -202,19 +216,43 @@ object Box64Launcher {
             put("POLYDROID_SCREEN_HEIGHT", "$screenHeight")
             val maxFps = SettingsActivity.getMaxFps(ctx)
             if (maxFps > 0) put("POLYDROID_MAX_FPS", "$maxFps")
-            // connect redirect: send api.polytoria.com traffic to our local proxy
-            if (polytoriaIp.isNotBlank() && proxyPort > 0) {
-                put("POLYDROID_REDIRECT_FROM_IP", polytoriaIp)
-                put("POLYDROID_REDIRECT_TO_IP", "127.0.0.1")
-                put("POLYDROID_REDIRECT_TO_PORT", "$proxyPort")
-            }
+            val displayHz = try {
+                if (android.os.Build.VERSION.SDK_INT >= 30) ctx.display?.refreshRate ?: 60f
+                else {
+                    @Suppress("DEPRECATION")
+                    (ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
+                        .defaultDisplay.refreshRate
+                }
+            } catch (_: Exception) { 60f }
+            put("POLYDROID_DISPLAY_FPS", "${kotlin.math.round(displayHz).toInt()}")
             put("SSL_CERT_FILE", "$rootPath/etc/ssl/certs/ca-certificates.crt")
             put("SSL_CERT_DIR", "$rootPath/etc/ssl/certs")
             put("CURL_CA_BUNDLE", "$rootPath/etc/ssl/certs/ca-certificates.crt")
             put("LC_ALL", "C")
             put("LANG", "C")
-            put("MONO_THREADS_SUSPEND", "preemptive")
-            put("IL2CPP_GC_SUSPEND_SIGNAL", "0")
+            put("OPENSSL_ia32cap", "0:0:0:0")
+            if (isPolytoria2) put("POLYDROID_POLYTORIA2", "1") // the native side has the flag aswell
+            put("DOTNET_gcServer", "0")
+            put("DOTNET_gcConcurrent", "0")
+            val totalRam = run {
+                val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                val mi = android.app.ActivityManager.MemoryInfo()
+                am.getMemoryInfo(mi)
+                mi.totalMem
+            }
+            put("DOTNET_GCgen0size", "0x%x".format(if (totalRam >= 6L shl 30) 0x10000000L else 0x8000000L))
+            put("DOTNET_GCNoAffinitize", "1")
+            put("DOTNET_GCCpuGroup", "0")
+            put("DOTNET_gcConservative", "1")
+            put("DOTNET_GCConservative", "1")
+            put("DOTNET_gcForceCompact", "0")
+            put("DOTNET_GCForceCompact", "0")
+            put("DOTNET_GCLatencyLevel", "0")
+            put("DOTNET_gcAllowVeryLargeObjects", "1")
+            val gcHeapLimit = (totalRam * 45 / 100).coerceIn(1L shl 30, 3L shl 30)
+            put("DOTNET_GCHeapHardLimit", "0x%x".format(gcHeapLimit))
+            put("DOTNET_DebugWriteToStdErr", "1")
+            put("DOTNET_EnableDiagnostics", "1")
             put("SDL_VIDEODRIVER", "x11")
             put("DISPLAY", ":0")
             put("XMODIFIERS", "@im=none")
@@ -242,7 +280,11 @@ object Box64Launcher {
             "export $k=\"$v\""
         }
 
-        val box64Cmd = "\"$nativeDir/libbox64.so\" \"$rootPath/polytoria/Polytoria Client.x86_64\" -force-vulkan$gameArgStr"
+        val engineArgs = if (isPolytoria2)
+            "--rendering-driver vulkan --rendering-method mobile --audio-driver ALSA"
+        else
+            "-force-vulkan -fullscreen"
+        val box64Cmd = "\"$nativeDir/libbox64.so\" \"$rootPath/polytoria/Polytoria Client.x86_64\" $engineArgs$gameArgStr"
         val execLine = if (execPrefix.isNotBlank())
             "${execPrefix}/system/bin/true >/dev/null 2>&1 && exec $execPrefix$box64Cmd\nexec $box64Cmd"
         else
@@ -250,6 +292,7 @@ object Box64Launcher {
         launchScript.writeText("""#!/bin/sh
 $envExports
 cd "$rootPath/polytoria"
+export LD_PRELOAD="$nativeDir/libhost_syscall_shim.so"
 $execLine
 """)
         launchScript.setExecutable(true, false)
@@ -281,7 +324,6 @@ $execLine
                     stream.bufferedReader().use { reader ->
                         reader.lineSequence().forEach { line ->
                             Log.i(TAG, "[$label] $line")
-                            onLog(line)
                         }
                     }
                 } catch (_: java.io.IOException) {

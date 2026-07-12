@@ -3,5 +3,11 @@
     <style name="Theme.PolyDroid2" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="sliderStyle">@style/Widget.PolyDroid2.Slider</item>
+    </style>
+
+    <style name="Widget.PolyDroid2.Slider" parent="Widget.Material3.Slider">
+        <item name="trackHeight">24dp</item>
+        <item name="tickVisibilityMode">hidden</item>
     </style>
 </resources>

@@ -1,254 +1,240 @@
-/*
- * dbus stub for FMOD init, without it, FMOD doesn't work
- */
+#define DBUS_EXPORT __attribute__((visibility("default")))
 
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-
-typedef int dbus_bool_t;
-typedef unsigned int dbus_uint32_t;
-typedef int dbus_int32_t;
-
-typedef struct DBusError {
-    const char *name;
-    const char *message;
-    unsigned int dummy1:1;
-    unsigned int dummy2:1;
-    unsigned int dummy3:1;
-    unsigned int dummy4:1;
-    unsigned int dummy5:1;
-    void *padding1;
-} DBusError;
-
-typedef struct DBusConnection { int dummy; } DBusConnection;
-typedef struct DBusMessage { int dummy; } DBusMessage;
-typedef struct DBusMessageIter { char _p[16]; int _d[11]; } DBusMessageIter;
-typedef struct DBusPendingCall { int dummy; } DBusPendingCall;
-typedef struct DBusWatch { int dummy; } DBusWatch;
-typedef struct DBusTimeout { int dummy; } DBusTimeout;
-typedef struct DBusObjectPathVTable { void *fns[8]; } DBusObjectPathVTable;
-
-typedef enum DBusBusType {
-    DBUS_BUS_SESSION,
-    DBUS_BUS_SYSTEM,
-    DBUS_BUS_STARTER
-} DBusBusType;
-
-dbus_bool_t dbus_threads_init_default(void) { return 1; }
-void dbus_shutdown(void) { }
-
-void dbus_error_init(DBusError *err) {
-    if (err) memset(err, 0, sizeof(*err));
-}
-void dbus_error_free(DBusError *err) {
-    if (err) memset(err, 0, sizeof(*err));
-}
-dbus_bool_t dbus_error_is_set(const DBusError *err) {
-    (void)err;
-    return 0;
-}
-
-DBusConnection *dbus_bus_get(DBusBusType type, DBusError *err) {
-    (void)type;
-    if (err) memset(err, 0, sizeof(*err));
-    return NULL;
-}
-DBusConnection *dbus_bus_get_private(DBusBusType type, DBusError *err) {
-    (void)type;
-    if (err) memset(err, 0, sizeof(*err));
-    return NULL;
-}
-dbus_bool_t dbus_bus_register(DBusConnection *c, DBusError *err) {
-    (void)c;
-    if (err) memset(err, 0, sizeof(*err));
-    return 0;
-}
-void dbus_bus_add_match(DBusConnection *c, const char *rule, DBusError *err) {
-    (void)c; (void)rule;
-    if (err) memset(err, 0, sizeof(*err));
-}
-dbus_uint32_t dbus_bus_request_name(DBusConnection *c, const char *name, unsigned int flags, DBusError *err) {
-    (void)c; (void)name; (void)flags;
-    if (err) memset(err, 0, sizeof(*err));
-    return 0;
-}
-
-DBusConnection *dbus_connection_open_private(const char *address, DBusError *err) {
-    (void)address;
-    if (err) memset(err, 0, sizeof(*err));
-    return NULL;
-}
-void dbus_connection_close(DBusConnection *c) { (void)c; }
-void dbus_connection_unref(DBusConnection *c) { (void)c; }
-DBusConnection *dbus_connection_ref(DBusConnection *c) { return c; }
-dbus_bool_t dbus_connection_get_is_connected(DBusConnection *c) { (void)c; return 0; }
-void dbus_connection_set_exit_on_disconnect(DBusConnection *c, dbus_bool_t b) { (void)c; (void)b; }
-void dbus_connection_flush(DBusConnection *c) { (void)c; }
-dbus_bool_t dbus_connection_read_write(DBusConnection *c, int timeout_ms) { (void)c; (void)timeout_ms; return 0; }
-dbus_bool_t dbus_connection_read_write_dispatch(DBusConnection *c, int timeout_ms) { (void)c; (void)timeout_ms; return 0; }
-int dbus_connection_dispatch(DBusConnection *c) { (void)c; return 0; /* DBUS_DISPATCH_COMPLETE */ }
-
-typedef dbus_bool_t (*DBusHandleMessageFunction)(DBusConnection*, DBusMessage*, void*);
-typedef void (*DBusFreeFunction)(void*);
-dbus_bool_t dbus_connection_add_filter(DBusConnection *c, DBusHandleMessageFunction f, void *ud, DBusFreeFunction ff) {
-    (void)c; (void)f; (void)ud; (void)ff;
-    return 1;
-}
-void dbus_connection_remove_filter(DBusConnection *c, DBusHandleMessageFunction f, void *ud) { (void)c; (void)f; (void)ud; }
-
-dbus_bool_t dbus_connection_try_register_object_path(DBusConnection *c, const char *path, const DBusObjectPathVTable *vt, void *ud, DBusError *err) {
-    (void)c; (void)path; (void)vt; (void)ud;
-    if (err) memset(err, 0, sizeof(*err));
-    return 1;
-}
-dbus_bool_t dbus_connection_register_object_path(DBusConnection *c, const char *path, const DBusObjectPathVTable *vt, void *ud) {
-    (void)c; (void)path; (void)vt; (void)ud;
-    return 1;
-}
-dbus_bool_t dbus_connection_unregister_object_path(DBusConnection *c, const char *path) { (void)c; (void)path; return 1; }
-
-dbus_bool_t dbus_connection_send(DBusConnection *c, DBusMessage *m, dbus_uint32_t *serial) {
-    (void)c; (void)m;
-    if (serial) *serial = 0;
-    return 0;
-}
-DBusMessage *dbus_connection_send_with_reply_and_block(DBusConnection *c, DBusMessage *m, int timeout, DBusError *err) {
-    (void)c; (void)m; (void)timeout;
-    if (err) memset(err, 0, sizeof(*err));
-    return NULL;
-}
-dbus_bool_t dbus_connection_send_with_reply(DBusConnection *c, DBusMessage *m, DBusPendingCall **pc, int timeout) {
-    (void)c; (void)m; (void)timeout;
-    if (pc) *pc = NULL;
-    return 0;
-}
-
-typedef dbus_bool_t (*DBusAddWatchFunction)(DBusWatch*, void*);
-typedef void (*DBusRemoveWatchFunction)(DBusWatch*, void*);
-typedef void (*DBusWatchToggledFunction)(DBusWatch*, void*);
-typedef dbus_bool_t (*DBusAddTimeoutFunction)(DBusTimeout*, void*);
-typedef void (*DBusRemoveTimeoutFunction)(DBusTimeout*, void*);
-typedef void (*DBusTimeoutToggledFunction)(DBusTimeout*, void*);
-
-dbus_bool_t dbus_connection_set_watch_functions(DBusConnection *c, DBusAddWatchFunction a, DBusRemoveWatchFunction r, DBusWatchToggledFunction t, void *ud, DBusFreeFunction ff) {
-    (void)c; (void)a; (void)r; (void)t; (void)ud; (void)ff;
-    return 1;
-}
-dbus_bool_t dbus_connection_set_timeout_functions(DBusConnection *c, DBusAddTimeoutFunction a, DBusRemoveTimeoutFunction r, DBusTimeoutToggledFunction t, void *ud, DBusFreeFunction ff) {
-    (void)c; (void)a; (void)r; (void)t; (void)ud; (void)ff;
-    return 1;
-}
-
-DBusMessage *dbus_message_new_method_call(const char *dest, const char *path, const char *iface, const char *method) {
-    (void)dest; (void)path; (void)iface; (void)method;
-    return NULL;
-}
-DBusMessage *dbus_message_new_signal(const char *path, const char *iface, const char *name) {
-    (void)path; (void)iface; (void)name;
-    return NULL;
-}
-void dbus_message_unref(DBusMessage *m) { (void)m; }
-DBusMessage *dbus_message_ref(DBusMessage *m) { return m; }
-dbus_bool_t dbus_message_is_signal(DBusMessage *m, const char *iface, const char *name) {
-    (void)m; (void)iface; (void)name;
-    return 0;
-}
-dbus_bool_t dbus_message_is_method_call(DBusMessage *m, const char *iface, const char *name) {
-    (void)m; (void)iface; (void)name;
-    return 0;
-}
-int dbus_message_get_type(DBusMessage *m) { (void)m; return 0; }
-const char *dbus_message_get_path(DBusMessage *m) { (void)m; return NULL; }
-const char *dbus_message_get_interface(DBusMessage *m) { (void)m; return NULL; }
-const char *dbus_message_get_member(DBusMessage *m) { (void)m; return NULL; }
-const char *dbus_message_get_sender(DBusMessage *m) { (void)m; return NULL; }
-
-dbus_bool_t dbus_message_append_args(DBusMessage *m, int first_arg_type, ...) {
-    (void)m; (void)first_arg_type;
-    return 1;
-}
-dbus_bool_t dbus_message_append_args_valist(DBusMessage *m, int first_arg_type, void *va) {
-    (void)m; (void)first_arg_type; (void)va;
-    return 1;
-}
-dbus_bool_t dbus_message_get_args(DBusMessage *m, DBusError *err, int first_arg_type, ...) {
-    (void)m; (void)first_arg_type;
-    if (err) memset(err, 0, sizeof(*err));
-    return 0;
-}
-dbus_bool_t dbus_message_get_args_valist(DBusMessage *m, DBusError *err, int first_arg_type, void *va) {
-    (void)m; (void)first_arg_type; (void)va;
-    if (err) memset(err, 0, sizeof(*err));
-    return 0;
-}
-
-dbus_bool_t dbus_message_iter_init(DBusMessage *m, DBusMessageIter *it) {
-    (void)m;
-    if (it) memset(it, 0, sizeof(*it));
-    return 0;
-}
-void dbus_message_iter_init_append(DBusMessage *m, DBusMessageIter *it) {
-    (void)m;
-    if (it) memset(it, 0, sizeof(*it));
-}
-dbus_bool_t dbus_message_iter_append_basic(DBusMessageIter *it, int type, const void *v) {
-    (void)it; (void)type; (void)v;
-    return 1;
-}
-dbus_bool_t dbus_message_iter_open_container(DBusMessageIter *it, int type, const char *sig, DBusMessageIter *sub) {
-    (void)it; (void)type; (void)sig;
-    if (sub) memset(sub, 0, sizeof(*sub));
-    return 1;
-}
-dbus_bool_t dbus_message_iter_close_container(DBusMessageIter *it, DBusMessageIter *sub) {
-    (void)it; (void)sub;
-    return 1;
-}
-int dbus_message_iter_get_arg_type(DBusMessageIter *it) { (void)it; return 0; /* DBUS_TYPE_INVALID */ }
-int dbus_message_iter_get_element_type(DBusMessageIter *it) { (void)it; return 0; }
-void dbus_message_iter_get_basic(DBusMessageIter *it, void *v) { (void)it; (void)v; }
-void dbus_message_iter_recurse(DBusMessageIter *it, DBusMessageIter *sub) {
-    (void)it;
-    if (sub) memset(sub, 0, sizeof(*sub));
-}
-dbus_bool_t dbus_message_iter_next(DBusMessageIter *it) { (void)it; return 0; }
-int dbus_message_iter_get_element_count(DBusMessageIter *it) { (void)it; return 0; }
-
-void dbus_free(void *p) { free(p); }
-void dbus_free_string_array(char **arr) {
-    if (!arr) return;
-    for (char **p = arr; *p; p++) free(*p);
-    free(arr);
-}
-void *dbus_malloc(size_t n) { return malloc(n); }
-void *dbus_malloc0(size_t n) { return calloc(1, n); }
-void *dbus_realloc(void *p, size_t n) { return realloc(p, n); }
-
-const char *dbus_get_local_machine_id(void) {
-    static const char id[] = "polydroid00000000000000000000000";
-    return id;
-}
-void dbus_connection_setup_with_g_main(DBusConnection *c, void *ctx) { (void)c; (void)ctx; }
-
-void dbus_pending_call_unref(DBusPendingCall *pc) { (void)pc; }
-DBusPendingCall *dbus_pending_call_ref(DBusPendingCall *pc) { return pc; }
-dbus_bool_t dbus_pending_call_get_completed(DBusPendingCall *pc) { (void)pc; return 1; }
-DBusMessage *dbus_pending_call_steal_reply(DBusPendingCall *pc) { (void)pc; return NULL; }
-void dbus_pending_call_block(DBusPendingCall *pc) { (void)pc; }
-void dbus_pending_call_cancel(DBusPendingCall *pc) { (void)pc; }
-
-int dbus_watch_get_unix_fd(DBusWatch *w) { (void)w; return -1; }
-int dbus_watch_get_socket(DBusWatch *w) { (void)w; return -1; }
-unsigned int dbus_watch_get_flags(DBusWatch *w) { (void)w; return 0; }
-void *dbus_watch_get_data(DBusWatch *w) { (void)w; return NULL; }
-void dbus_watch_set_data(DBusWatch *w, void *d, DBusFreeFunction f) { (void)w; (void)d; (void)f; }
-dbus_bool_t dbus_watch_handle(DBusWatch *w, unsigned int flags) { (void)w; (void)flags; return 1; }
-dbus_bool_t dbus_watch_get_enabled(DBusWatch *w) { (void)w; return 0; }
-
-int dbus_timeout_get_interval(DBusTimeout *t) { (void)t; return 0; }
-void *dbus_timeout_get_data(DBusTimeout *t) { (void)t; return NULL; }
-void dbus_timeout_set_data(DBusTimeout *t, void *d, DBusFreeFunction f) { (void)t; (void)d; (void)f; }
-dbus_bool_t dbus_timeout_handle(DBusTimeout *t) { (void)t; return 1; }
-dbus_bool_t dbus_timeout_get_enabled(DBusTimeout *t) { (void)t; return 0; }
+DBUS_EXPORT long dbus_error_init() { return 0; }
+DBUS_EXPORT long dbus_error_free() { return 0; }
+DBUS_EXPORT long dbus_set_error() { return 0; }
+DBUS_EXPORT long dbus_set_error_const() { return 0; }
+DBUS_EXPORT long dbus_move_error() { return 0; }
+DBUS_EXPORT long dbus_error_has_name() { return 0; }
+DBUS_EXPORT long dbus_error_is_set() { return 0; }
+DBUS_EXPORT long dbus_parse_address() { return 0; }
+DBUS_EXPORT long dbus_address_entry_get_value() { return 0; }
+DBUS_EXPORT long dbus_address_entry_get_method() { return 0; }
+DBUS_EXPORT long dbus_address_entries_free() { return 0; }
+DBUS_EXPORT long dbus_address_escape_value() { return 0; }
+DBUS_EXPORT long dbus_address_unescape_value() { return 0; }
+DBUS_EXPORT long dbus_malloc() { return 0; }
+DBUS_EXPORT long dbus_malloc0() { return 0; }
+DBUS_EXPORT long dbus_realloc() { return 0; }
+DBUS_EXPORT long dbus_free() { return 0; }
+DBUS_EXPORT long dbus_free_string_array() { return 0; }
+DBUS_EXPORT long dbus_shutdown() { return 0; }
+DBUS_EXPORT long dbus_message_new() { return 0; }
+DBUS_EXPORT long dbus_message_new_method_call() { return 0; }
+DBUS_EXPORT long dbus_message_new_method_return() { return 0; }
+DBUS_EXPORT long dbus_message_new_signal() { return 0; }
+DBUS_EXPORT long dbus_message_new_error() { return 0; }
+DBUS_EXPORT long dbus_message_new_error_printf() { return 0; }
+DBUS_EXPORT long dbus_message_copy() { return 0; }
+DBUS_EXPORT long dbus_message_ref() { return 0; }
+DBUS_EXPORT long dbus_message_unref() { return 0; }
+DBUS_EXPORT long dbus_message_get_type() { return 0; }
+DBUS_EXPORT long dbus_message_set_path() { return 0; }
+DBUS_EXPORT long dbus_message_get_path() { return 0; }
+DBUS_EXPORT long dbus_message_has_path() { return 0; }
+DBUS_EXPORT long dbus_message_set_interface() { return 0; }
+DBUS_EXPORT long dbus_message_get_interface() { return 0; }
+DBUS_EXPORT long dbus_message_has_interface() { return 0; }
+DBUS_EXPORT long dbus_message_set_member() { return 0; }
+DBUS_EXPORT long dbus_message_get_member() { return 0; }
+DBUS_EXPORT long dbus_message_has_member() { return 0; }
+DBUS_EXPORT long dbus_message_set_error_name() { return 0; }
+DBUS_EXPORT long dbus_message_get_error_name() { return 0; }
+DBUS_EXPORT long dbus_message_set_destination() { return 0; }
+DBUS_EXPORT long dbus_message_get_destination() { return 0; }
+DBUS_EXPORT long dbus_message_set_sender() { return 0; }
+DBUS_EXPORT long dbus_message_get_sender() { return 0; }
+DBUS_EXPORT long dbus_message_get_signature() { return 0; }
+DBUS_EXPORT long dbus_message_set_no_reply() { return 0; }
+DBUS_EXPORT long dbus_message_get_no_reply() { return 0; }
+DBUS_EXPORT long dbus_message_is_method_call() { return 0; }
+DBUS_EXPORT long dbus_message_is_signal() { return 0; }
+DBUS_EXPORT long dbus_message_is_error() { return 0; }
+DBUS_EXPORT long dbus_message_has_destination() { return 0; }
+DBUS_EXPORT long dbus_message_has_sender() { return 0; }
+DBUS_EXPORT long dbus_message_has_signature() { return 0; }
+DBUS_EXPORT long dbus_message_get_serial() { return 0; }
+DBUS_EXPORT long dbus_message_set_serial() { return 0; }
+DBUS_EXPORT long dbus_message_set_reply_serial() { return 0; }
+DBUS_EXPORT long dbus_message_get_reply_serial() { return 0; }
+DBUS_EXPORT long dbus_message_set_auto_start() { return 0; }
+DBUS_EXPORT long dbus_message_get_auto_start() { return 0; }
+DBUS_EXPORT long dbus_message_get_path_decomposed() { return 0; }
+DBUS_EXPORT long dbus_message_append_args() { return 0; }
+DBUS_EXPORT long dbus_message_append_args_valist() { return 0; }
+DBUS_EXPORT long dbus_message_get_args() { return 0; }
+DBUS_EXPORT long dbus_message_get_args_valist() { return 0; }
+DBUS_EXPORT long dbus_message_contains_unix_fds() { return 0; }
+DBUS_EXPORT long dbus_message_iter_init_closed() { return 0; }
+DBUS_EXPORT long dbus_message_iter_init() { return 0; }
+DBUS_EXPORT long dbus_message_iter_has_next() { return 0; }
+DBUS_EXPORT long dbus_message_iter_next() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_signature() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_arg_type() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_element_type() { return 0; }
+DBUS_EXPORT long dbus_message_iter_recurse() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_basic() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_element_count() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_array_len() { return 0; }
+DBUS_EXPORT long dbus_message_iter_get_fixed_array() { return 0; }
+DBUS_EXPORT long dbus_message_iter_init_append() { return 0; }
+DBUS_EXPORT long dbus_message_iter_append_basic() { return 0; }
+DBUS_EXPORT long dbus_message_iter_append_fixed_array() { return 0; }
+DBUS_EXPORT long dbus_message_iter_open_container() { return 0; }
+DBUS_EXPORT long dbus_message_iter_close_container() { return 0; }
+DBUS_EXPORT long dbus_message_iter_abandon_container() { return 0; }
+DBUS_EXPORT long dbus_message_iter_abandon_container_if_open() { return 0; }
+DBUS_EXPORT long dbus_message_lock() { return 0; }
+DBUS_EXPORT long dbus_set_error_from_message() { return 0; }
+DBUS_EXPORT long dbus_message_allocate_data_slot() { return 0; }
+DBUS_EXPORT long dbus_message_free_data_slot() { return 0; }
+DBUS_EXPORT long dbus_message_set_data() { return 0; }
+DBUS_EXPORT long dbus_message_get_data() { return 0; }
+DBUS_EXPORT long dbus_message_type_from_string() { return 0; }
+DBUS_EXPORT long dbus_message_type_to_string() { return 0; }
+DBUS_EXPORT long dbus_message_marshal() { return 0; }
+DBUS_EXPORT long dbus_message_demarshal() { return 0; }
+DBUS_EXPORT long dbus_message_demarshal_bytes_needed() { return 0; }
+DBUS_EXPORT long dbus_message_set_allow_interactive_authorization() { return 0; }
+DBUS_EXPORT long dbus_message_get_allow_interactive_authorization() { return 0; }
+DBUS_EXPORT long dbus_connection_open() { return 0; }
+DBUS_EXPORT long dbus_connection_open_private() { return 0; }
+DBUS_EXPORT long dbus_connection_ref() { return 0; }
+DBUS_EXPORT long dbus_connection_unref() { return 0; }
+DBUS_EXPORT long dbus_connection_close() { return 0; }
+DBUS_EXPORT long dbus_connection_get_is_connected() { return 0; }
+DBUS_EXPORT long dbus_connection_get_is_authenticated() { return 0; }
+DBUS_EXPORT long dbus_connection_get_is_anonymous() { return 0; }
+DBUS_EXPORT long dbus_connection_get_server_id() { return 0; }
+DBUS_EXPORT long dbus_connection_can_send_type() { return 0; }
+DBUS_EXPORT long dbus_connection_set_exit_on_disconnect() { return 0; }
+DBUS_EXPORT long dbus_connection_flush() { return 0; }
+DBUS_EXPORT long dbus_connection_read_write_dispatch() { return 0; }
+DBUS_EXPORT long dbus_connection_read_write() { return 0; }
+DBUS_EXPORT long dbus_connection_borrow_message() { return 0; }
+DBUS_EXPORT long dbus_connection_return_message() { return 0; }
+DBUS_EXPORT long dbus_connection_steal_borrowed_message() { return 0; }
+DBUS_EXPORT long dbus_connection_pop_message() { return 0; }
+DBUS_EXPORT long dbus_connection_get_dispatch_status() { return 0; }
+DBUS_EXPORT long dbus_connection_dispatch() { return 0; }
+DBUS_EXPORT long dbus_connection_has_messages_to_send() { return 0; }
+DBUS_EXPORT long dbus_connection_send() { return 0; }
+DBUS_EXPORT long dbus_connection_send_with_reply() { return 0; }
+DBUS_EXPORT long dbus_connection_send_with_reply_and_block() { return 0; }
+DBUS_EXPORT long dbus_connection_set_watch_functions() { return 0; }
+DBUS_EXPORT long dbus_connection_set_timeout_functions() { return 0; }
+DBUS_EXPORT long dbus_connection_set_wakeup_main_function() { return 0; }
+DBUS_EXPORT long dbus_connection_set_dispatch_status_function() { return 0; }
+DBUS_EXPORT long dbus_connection_get_unix_user() { return 0; }
+DBUS_EXPORT long dbus_connection_get_unix_process_id() { return 0; }
+DBUS_EXPORT long dbus_connection_get_adt_audit_session_data() { return 0; }
+DBUS_EXPORT long dbus_connection_set_unix_user_function() { return 0; }
+DBUS_EXPORT long dbus_connection_get_windows_user() { return 0; }
+DBUS_EXPORT long dbus_connection_set_windows_user_function() { return 0; }
+DBUS_EXPORT long dbus_connection_set_allow_anonymous() { return 0; }
+DBUS_EXPORT long dbus_connection_set_route_peer_messages() { return 0; }
+DBUS_EXPORT long dbus_connection_add_filter() { return 0; }
+DBUS_EXPORT long dbus_connection_remove_filter() { return 0; }
+DBUS_EXPORT long dbus_connection_allocate_data_slot() { return 0; }
+DBUS_EXPORT long dbus_connection_free_data_slot() { return 0; }
+DBUS_EXPORT long dbus_connection_set_data() { return 0; }
+DBUS_EXPORT long dbus_connection_get_data() { return 0; }
+DBUS_EXPORT long dbus_connection_set_change_sigpipe() { return 0; }
+DBUS_EXPORT long dbus_connection_set_max_message_size() { return 0; }
+DBUS_EXPORT long dbus_connection_get_max_message_size() { return 0; }
+DBUS_EXPORT long dbus_connection_set_max_received_size() { return 0; }
+DBUS_EXPORT long dbus_connection_get_max_received_size() { return 0; }
+DBUS_EXPORT long dbus_connection_set_max_message_unix_fds() { return 0; }
+DBUS_EXPORT long dbus_connection_get_max_message_unix_fds() { return 0; }
+DBUS_EXPORT long dbus_connection_set_max_received_unix_fds() { return 0; }
+DBUS_EXPORT long dbus_connection_get_max_received_unix_fds() { return 0; }
+DBUS_EXPORT long dbus_connection_get_outgoing_size() { return 0; }
+DBUS_EXPORT long dbus_connection_get_outgoing_unix_fds() { return 0; }
+DBUS_EXPORT long dbus_connection_preallocate_send() { return 0; }
+DBUS_EXPORT long dbus_connection_free_preallocated_send() { return 0; }
+DBUS_EXPORT long dbus_connection_send_preallocated() { return 0; }
+DBUS_EXPORT long dbus_connection_try_register_object_path() { return 0; }
+DBUS_EXPORT long dbus_connection_register_object_path() { return 0; }
+DBUS_EXPORT long dbus_connection_try_register_fallback() { return 0; }
+DBUS_EXPORT long dbus_connection_register_fallback() { return 0; }
+DBUS_EXPORT long dbus_connection_unregister_object_path() { return 0; }
+DBUS_EXPORT long dbus_connection_get_object_path_data() { return 0; }
+DBUS_EXPORT long dbus_connection_list_registered() { return 0; }
+DBUS_EXPORT long dbus_connection_get_unix_fd() { return 0; }
+DBUS_EXPORT long dbus_connection_get_socket() { return 0; }
+DBUS_EXPORT long dbus_watch_get_fd() { return 0; }
+DBUS_EXPORT long dbus_watch_get_unix_fd() { return 0; }
+DBUS_EXPORT long dbus_watch_get_socket() { return 0; }
+DBUS_EXPORT long dbus_watch_get_flags() { return 0; }
+DBUS_EXPORT long dbus_watch_get_data() { return 0; }
+DBUS_EXPORT long dbus_watch_set_data() { return 0; }
+DBUS_EXPORT long dbus_watch_handle() { return 0; }
+DBUS_EXPORT long dbus_watch_get_enabled() { return 0; }
+DBUS_EXPORT long dbus_timeout_get_interval() { return 0; }
+DBUS_EXPORT long dbus_timeout_get_data() { return 0; }
+DBUS_EXPORT long dbus_timeout_set_data() { return 0; }
+DBUS_EXPORT long dbus_timeout_handle() { return 0; }
+DBUS_EXPORT long dbus_timeout_get_enabled() { return 0; }
+DBUS_EXPORT long dbus_bus_get() { return 0; }
+DBUS_EXPORT long dbus_bus_get_private() { return 0; }
+DBUS_EXPORT long dbus_bus_register() { return 0; }
+DBUS_EXPORT long dbus_bus_set_unique_name() { return 0; }
+DBUS_EXPORT long dbus_bus_get_unique_name() { return 0; }
+DBUS_EXPORT long dbus_bus_get_unix_user() { return 0; }
+DBUS_EXPORT long dbus_bus_get_id() { return 0; }
+DBUS_EXPORT long dbus_bus_request_name() { return 0; }
+DBUS_EXPORT long dbus_bus_release_name() { return 0; }
+DBUS_EXPORT long dbus_bus_name_has_owner() { return 0; }
+DBUS_EXPORT long dbus_bus_start_service_by_name() { return 0; }
+DBUS_EXPORT long dbus_bus_add_match() { return 0; }
+DBUS_EXPORT long dbus_bus_remove_match() { return 0; }
+DBUS_EXPORT long dbus_get_local_machine_id() { return 0; }
+DBUS_EXPORT long dbus_get_version() { return 0; }
+DBUS_EXPORT long dbus_setenv() { return 0; }
+DBUS_EXPORT long dbus_try_get_local_machine_id() { return 0; }
+DBUS_EXPORT long dbus_pending_call_ref() { return 0; }
+DBUS_EXPORT long dbus_pending_call_unref() { return 0; }
+DBUS_EXPORT long dbus_pending_call_set_notify() { return 0; }
+DBUS_EXPORT long dbus_pending_call_cancel() { return 0; }
+DBUS_EXPORT long dbus_pending_call_get_completed() { return 0; }
+DBUS_EXPORT long dbus_pending_call_steal_reply() { return 0; }
+DBUS_EXPORT long dbus_pending_call_block() { return 0; }
+DBUS_EXPORT long dbus_pending_call_allocate_data_slot() { return 0; }
+DBUS_EXPORT long dbus_pending_call_free_data_slot() { return 0; }
+DBUS_EXPORT long dbus_pending_call_set_data() { return 0; }
+DBUS_EXPORT long dbus_pending_call_get_data() { return 0; }
+DBUS_EXPORT long dbus_server_listen() { return 0; }
+DBUS_EXPORT long dbus_server_ref() { return 0; }
+DBUS_EXPORT long dbus_server_unref() { return 0; }
+DBUS_EXPORT long dbus_server_disconnect() { return 0; }
+DBUS_EXPORT long dbus_server_get_is_connected() { return 0; }
+DBUS_EXPORT long dbus_server_get_address() { return 0; }
+DBUS_EXPORT long dbus_server_get_id() { return 0; }
+DBUS_EXPORT long dbus_server_set_new_connection_function() { return 0; }
+DBUS_EXPORT long dbus_server_set_watch_functions() { return 0; }
+DBUS_EXPORT long dbus_server_set_timeout_functions() { return 0; }
+DBUS_EXPORT long dbus_server_set_auth_mechanisms() { return 0; }
+DBUS_EXPORT long dbus_server_allocate_data_slot() { return 0; }
+DBUS_EXPORT long dbus_server_free_data_slot() { return 0; }
+DBUS_EXPORT long dbus_server_set_data() { return 0; }
+DBUS_EXPORT long dbus_server_get_data() { return 0; }
+DBUS_EXPORT long dbus_signature_iter_init() { return 0; }
+DBUS_EXPORT long dbus_signature_iter_get_current_type() { return 0; }
+DBUS_EXPORT long dbus_signature_iter_get_signature() { return 0; }
+DBUS_EXPORT long dbus_signature_iter_get_element_type() { return 0; }
+DBUS_EXPORT long dbus_signature_iter_next() { return 0; }
+DBUS_EXPORT long dbus_signature_iter_recurse() { return 0; }
+DBUS_EXPORT long dbus_signature_validate() { return 0; }
+DBUS_EXPORT long dbus_signature_validate_single() { return 0; }
+DBUS_EXPORT long dbus_type_is_valid() { return 0; }
+DBUS_EXPORT long dbus_type_is_basic() { return 0; }
+DBUS_EXPORT long dbus_type_is_container() { return 0; }
+DBUS_EXPORT long dbus_type_is_fixed() { return 0; }
+DBUS_EXPORT long dbus_validate_path() { return 0; }
+DBUS_EXPORT long dbus_validate_interface() { return 0; }
+DBUS_EXPORT long dbus_validate_member() { return 0; }
+DBUS_EXPORT long dbus_validate_error_name() { return 0; }
+DBUS_EXPORT long dbus_validate_bus_name() { return 0; }
+DBUS_EXPORT long dbus_validate_utf8() { return 0; }
+DBUS_EXPORT long dbus_threads_init() { return 0; }
+DBUS_EXPORT long dbus_threads_init_default() { return 0; }

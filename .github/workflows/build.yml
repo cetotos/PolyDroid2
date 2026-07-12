@@ -27,7 +27,7 @@ jobs:
           packages: 'platforms;android-36 build-tools;35.0.0 ndk;29.0.14206865 cmake;3.22.1'
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y p7zip-full ninja-build
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
 
       - name: Build Box64
         run: |

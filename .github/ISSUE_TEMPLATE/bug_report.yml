@@ -1,0 +1,98 @@
+name: Bug report
+description: Box64 crashes, features that don't work, freezes etc.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening an issue, use **Settings -> Other -> Send app logs** in the app right after the problem happens.
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: You can find the app version in the Other tab in the settings menu.
+      placeholder: 0.9.0b
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options:
+        - Polytoria 2.0
+        - Polytoria 1.0
+        - Both
+        - App itself (Settings menu, overlay etc.)
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: This will help identify your sent logs. If your device has regional models, list that aswell.
+      placeholder: Samsung Galaxy S25+ Global
+    validations:
+      required: true
+  - type: input
+    id: soc-gpu
+    attributes:
+      label: SoC and GPU
+      description: If unsure, you can use the app CPU-Z from the Play Store.
+      placeholder: Snapdragon 8 Gen 2 / Adreno 740
+    validations:
+      required: true
+  - type: input
+    id: android-version
+    attributes:
+      label: Android version
+      placeholder: Android 16 (One UI 8.5)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What happened and what was expected instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Join any 2.0 game
+        2. Open the menu
+        3. Go to settings
+        4. ..and so on
+    validations:
+      required: true
+  - type: dropdown
+    id: safe-mode
+    attributes:
+      label: If a crash or freeze during gameplay, does it also happen with Safe mode enabled?
+      description: Settings -> Other -> Safe mode
+      options:
+        - Yes, same with Safe mode
+        - No, Safe mode fixes it
+        - Not a crash
+    validations:
+      required: true
+  - type: dropdown
+    id: vulkan-driver
+    attributes:
+      label: Vulkan driver setting
+      options:
+        - System driver
+        - Turnip
+        - Auto
+  - type: input
+    id: logs-sent
+    attributes:
+      label: Logs sent via the app?
+      description: If you used Settings -> Send app logs, say roughly when with timezone. This helps identify the logs sent.
+      placeholder: Yes, today at 18:36 GMT+2
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, videos, anything else you'd like to add?

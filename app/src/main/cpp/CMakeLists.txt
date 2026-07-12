@@ -12,7 +12,7 @@ target_link_libraries(native_window_jni
     nativewindow
 )
 add_library(GL SHARED
-    glx_shim.c
+    glx.c
 )
 
 target_link_libraries(GL
@@ -20,7 +20,7 @@ target_link_libraries(GL
     dl
 )
 add_library(vulkan_surface_shim SHARED
-    vulkan_surface_shim.c
+    vulkan.c
 )
 set_target_properties(vulkan_surface_shim PROPERTIES
     SUFFIX ".so"
@@ -32,6 +32,15 @@ target_link_libraries(vulkan_surface_shim
     dl
     nativewindow
     log
+)
+
+add_library(host_syscall_shim SHARED
+    host_syscall.c
+)
+target_link_libraries(host_syscall_shim dl)
+
+add_library(dbus-1 SHARED
+    dbus_stub.c
 )
 
 

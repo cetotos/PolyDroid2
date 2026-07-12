@@ -23,14 +23,8 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static atomic_int g_comp_fps = 0;
 static atomic_int g_unity_fps = 0;
 static atomic_int g_comp_total_frames = 0;
-
-#define MEDIAN_WINDOW 600
-static uint32_t g_frametimes_us[MEDIAN_WINDOW];
-static atomic_int g_frametime_idx = 0;
-static atomic_int g_frametime_count = 0;
 
 static char g_vulkan_info[256] = "";
 
@@ -195,6 +189,13 @@ static void* bridge_listen_thread(void* arg) {
 #include <android/hardware_buffer.h>
 #include <android/rect.h>
 
+#ifndef AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
+#define AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM 1
+#endif
+#ifndef AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
+#define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
+#endif
+
 typedef struct ASurfaceControl ASurfaceControl;
 typedef struct ASurfaceTransaction ASurfaceTransaction;
 
@@ -344,6 +345,12 @@ static void* compositor_thread(void* arg) {
                 .rfu1 = 0,
             };
             int ret = AHardwareBuffer_allocate(&desc, &g_comp_ahbs[i]);
+            if (ret != 0 && format == AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM) {
+                LOGE("compositor: BGRA alloc[%u] failed: %d, falling back to RGBA", i, ret);
+                format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+                desc.format = format;
+                ret = AHardwareBuffer_allocate(&desc, &g_comp_ahbs[i]);
+            }
             if (ret != 0) {
                 LOGE("compositor: AHardwareBuffer_allocate[%u] failed: %d", i, ret);
                 alloc_failed = 1;
@@ -359,6 +366,9 @@ static void* compositor_thread(void* arg) {
 
             AHardwareBuffer_Desc actual_desc;
             AHardwareBuffer_describe(g_comp_ahbs[i], &actual_desc);
+            if (i == 0)
+                LOGI("compositor: requested fmt=%u, allocated fmt=%u (%ux%u stride=%u)",
+                     format, actual_desc.format, actual_desc.width, actual_desc.height, actual_desc.stride);
         }
         g_comp_ahb_count = count;
 
@@ -428,10 +438,6 @@ static void* compositor_thread(void* arg) {
 
         // -------------------------- frame loop ------------
         int frame_count = 0;
-        struct timespec fps_start;
-        clock_gettime(CLOCK_MONOTONIC, &fps_start);
-        int fps_frame_counter = 0;
-        struct timespec last_frame = fps_start;
 
         ARect src = {0, 0, (int32_t)width, (int32_t)height};
         ARect dst = {0, 0, screen_w, screen_h};
@@ -515,30 +521,7 @@ static void* compositor_thread(void* arg) {
             ASurfaceTransaction_apply(txn);
 
             frame_count++;
-            fps_frame_counter++;
             atomic_store(&g_comp_total_frames, frame_count);
-
-            // calculate FPS
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            long dt_ns = (now.tv_sec - last_frame.tv_sec) * 1000000000L +
-                         (now.tv_nsec - last_frame.tv_nsec);
-            last_frame = now;
-            if (dt_ns > 0 && dt_ns < 1000000000L) {
-                int idx = atomic_load(&g_frametime_idx);
-                g_frametimes_us[idx] = (uint32_t)(dt_ns / 1000);
-                atomic_store(&g_frametime_idx, (idx + 1) % MEDIAN_WINDOW);
-                int cnt = atomic_load(&g_frametime_count);
-                if (cnt < MEDIAN_WINDOW) atomic_store(&g_frametime_count, cnt + 1);
-            }
-            long elapsed_ns = (now.tv_sec - fps_start.tv_sec) * 1000000000L +
-                              (now.tv_nsec - fps_start.tv_nsec);
-            if (elapsed_ns >= 1000000000L) {
-                int fps = (int)((long long)fps_frame_counter * 1000000000LL / elapsed_ns);
-                atomic_store(&g_comp_fps, fps);
-                fps_frame_counter = 0;
-                fps_start = now;
-            }
 
             static int s_total_dropped = 0;
             s_total_dropped += dropped;
@@ -743,13 +726,6 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartX11Bridge(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_cetotos_polydroid2_GameActivity_nativeGetCompositorFps(
-    JNIEnv* env, jobject thiz)
-{
-    return (jint)atomic_load(&g_comp_fps);
-}
-
-JNIEXPORT jint JNICALL
 Java_com_cetotos_polydroid2_GameActivity_nativeGetUnityFps(
     JNIEnv* env, jobject thiz)
 {
@@ -761,25 +737,6 @@ Java_com_cetotos_polydroid2_GameActivity_nativeGetTotalFrames(
     JNIEnv* env, jobject thiz)
 {
     return (jint)atomic_load(&g_comp_total_frames);
-}
-
-static int cmp_u32(const void* a, const void* b) {
-    uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
-    return (x < y) ? -1 : (x > y);
-}
-
-JNIEXPORT jint JNICALL
-Java_com_cetotos_polydroid2_GameActivity_nativeGetMedianFps(
-    JNIEnv* env, jobject thiz)
-{
-    int cnt = atomic_load(&g_frametime_count);
-    if (cnt < 10) return 0;
-    uint32_t copy[MEDIAN_WINDOW];
-    memcpy(copy, g_frametimes_us, cnt * sizeof(uint32_t));
-    qsort(copy, cnt, sizeof(uint32_t), cmp_u32);
-    uint32_t median_us = copy[cnt / 2];
-    if (median_us == 0) return 0;
-    return (jint)(1000000 / median_us);
 }
 
 JNIEXPORT jstring JNICALL
