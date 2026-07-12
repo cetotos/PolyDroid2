@@ -256,7 +256,7 @@ static int read_nameservers(char ns[][64], int max)
         while (*end && *end != ' ' && *end != '\t' && *end != '\n') end++;
         *end = '\0';
         if (strlen(p) > 0 && strlen(p) < 64) {
-            strncpy(ns[count], p, 63);
+            snprintf(ns[count], 64, "%s", p);
             count++;
         }
     }
@@ -324,8 +324,8 @@ int getaddrinfo(const char *node, const char *service,
     int ns_count = read_nameservers(nameservers, MAX_NS);
 
     if (ns_count == 0) {
-        strcpy(nameservers[0], "8.8.8.8");
-        strcpy(nameservers[1], "8.8.4.4");
+        snprintf(nameservers[0], 64, "%s", "8.8.8.8");
+        snprintf(nameservers[1], 64, "%s", "8.8.4.4");
         ns_count = 2;
     }
 
