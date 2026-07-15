@@ -78,6 +78,7 @@ object LogReporter {
                 val report = buildReport(ctx, client, note).toByteArray(Charsets.UTF_8)
                 val gameLog = readGameLog(ctx, client).toByteArray(Charsets.UTF_8)
                 val logcat = readLogcat().toByteArray(Charsets.UTF_8)
+                val sessionLog = readSessionLog(ctx).toByteArray(Charsets.UTF_8)
 
                 onProgress("Sending…")
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -85,6 +86,7 @@ object LogReporter {
                     .addFormDataPart("files[0]", "report.txt", report.toRequestBody(plain))
                     .addFormDataPart("files[1]", client.logName, gameLog.toRequestBody(plain))
                     .addFormDataPart("files[2]", "logcat.log", logcat.toRequestBody(plain))
+                    .addFormDataPart("files[3]", "session.log", sessionLog.toRequestBody(plain))
                     .build()
                 val req = Request.Builder().url(endpoint()).post(body).build()
                 http.newCall(req).execute().use { resp ->
@@ -154,6 +156,16 @@ object LogReporter {
                 appendLine(line)
             }
         }
+    }
+
+    private fun readSessionLog(ctx: Context): String {
+        val files = Box64Launcher.sessionLogFiles(ctx)
+        if (files.isEmpty()) return "no session log"
+        val lines = files.flatMap { f ->
+            try { f.readLines() } catch (e: Exception) { listOf("failed to read ${f.name}: ${e.message}") }
+        }
+        val start = (lines.size - GAME_LOG_TAIL).coerceAtLeast(0)
+        return lines.subList(start, lines.size).joinToString("\n")
     }
 
     private fun readLogcat(): String {

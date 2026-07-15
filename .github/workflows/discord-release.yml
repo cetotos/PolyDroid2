@@ -2,15 +2,10 @@ name: discord-release
 
 on:
   release:
-    types: [published, released, edited]
+    types: [published]
 
 jobs:
   notify:
-    if: >-
-      github.event.release.draft == false &&
-      (github.event.action == 'published' ||
-       github.event.action == 'released' ||
-       (github.event.action == 'edited' && github.event.changes.draft.from == true))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

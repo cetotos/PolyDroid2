@@ -6,8 +6,52 @@ import java.io.File
 
 object Box64Launcher {
     private const val TAG = "PolyDroid2"
+    private const val SESSION_LOG_MAX = 4L shl 20
 
     private var process: Process? = null
+    private var sessionLogDir: File? = null
+    private var sessionLogWriter: java.io.Writer? = null
+    private var sessionLogBytes = 0L
+
+    fun sessionLogFiles(ctx: Context): List<File> =
+        listOf(File(ctx.filesDir, "session.log.1"), File(ctx.filesDir, "session.log")).filter { it.exists() }
+
+    @Synchronized
+    private fun startSessionLog(ctx: Context) {
+        try {
+            sessionLogWriter?.close()
+        } catch (_: Exception) {}
+        File(ctx.filesDir, "session.log.1").delete()
+        sessionLogDir = ctx.filesDir
+        sessionLogBytes = 0
+        sessionLogWriter = try {
+            java.io.FileWriter(File(ctx.filesDir, "session.log"), false)
+        } catch (e: Exception) {
+            Log.w(TAG, "session log open failed: ${e.message}")
+            null
+        }
+    }
+
+    @Synchronized
+    fun sessionLog(line: String) {
+        val w = sessionLogWriter ?: return
+        try {
+            w.write(line)
+            w.write("\n")
+            w.flush()
+            sessionLogBytes += line.length + 1
+            if (sessionLogBytes > SESSION_LOG_MAX) {
+                w.close()
+                val dir = sessionLogDir ?: return
+                val f = File(dir, "session.log")
+                f.renameTo(File(dir, "session.log.1"))
+                sessionLogWriter = java.io.FileWriter(f, false)
+                sessionLogBytes = 0
+            }
+        } catch (_: Exception) {
+            sessionLogWriter = null
+        }
+    }
 
     fun launch(ctx: Context, tmpDir: String, gameArgs: String = "", screenWidth: Int = 1280, screenHeight: Int = 720, onLog: (String) -> Unit, onExit: ((Int) -> Unit)? = null): Process {
         val root = RootFs.rootDir(ctx)
@@ -148,6 +192,8 @@ object Box64Launcher {
                 "$x86Pre/libpthread_recursive_fix.so",
                 "$x86Pre/libgodot_ctype_patch.so",
                 "$x86Pre/libctype_fix.so",
+                "$x86Pre/libpath_remap.so",
+                "$x86Pre/libsysconf_fix.so",
                 "$x86Pre/libdns_resolver.so",
                 "$x86Pre/libconnect_redirect.so"
             ).joinToString(":")
@@ -301,6 +347,10 @@ $execLine
         val launchEnv = System.getenv().map { (k, v) -> "$k=$v" }.toTypedArray()
 
         val cmdStr = cmd.joinToString(" ")
+        startSessionLog(ctx)
+        sessionLog("----------- session start ${java.util.Date()}")
+        sessionLog("Launching: $cmdStr")
+        env.entries.forEach { (k, v) -> sessionLog("  $k=$v") }
         Log.i(TAG, "Launching: $cmdStr")
         Log.i(TAG, "Guest env: ${env.entries.joinToString("\n  ")}")
 
@@ -324,6 +374,7 @@ $execLine
                     stream.bufferedReader().use { reader ->
                         reader.lineSequence().forEach { line ->
                             Log.i(TAG, "[$label] $line")
+                            if (line.startsWith("[")) sessionLog(line)
                         }
                     }
                 } catch (_: java.io.IOException) {
@@ -337,6 +388,7 @@ $execLine
         Thread({
             val exit = proc.waitFor()
             Log.i(TAG, "Box64 exited with code $exit")
+            sessionLog("Box64 exited with code $exit")
             onLog("Box64 exited with code $exit")
             onExit?.invoke(exit)
         }, "box64-wait").start()

@@ -222,7 +222,7 @@ void ASurfaceTransaction_setGeometry(ASurfaceTransaction* transaction,
                                      const ARect* source,
                                      const ARect* destination,
                                      int32_t transform);
-#define ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE 1
+#define ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE 2
 void ASurfaceTransaction_setBufferTransparency(ASurfaceTransaction* transaction,
                                                ASurfaceControl* surface_control,
                                                int8_t transparency);
