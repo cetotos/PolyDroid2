@@ -238,6 +238,7 @@ typedef const native_handle_t* (*PFN_AHardwareBuffer_getNativeHandle)(
     const AHardwareBuffer* buffer);
 
 static int g_compositor_fd = -1;
+static _Atomic int g_compositor_gen = 0;
 static ASurfaceControl* g_surface_ctl = NULL;
 static ANativeWindow* g_compositor_win = NULL;
 
@@ -299,17 +300,21 @@ static int pin_to_big_cores(const char* tag) {
 }
 
 static void* compositor_thread(void* arg) {
-    (void)arg;
+    int my_gen = (int)(intptr_t)arg;
 
     pid_t tid = (pid_t)syscall(SYS_gettid);
     if (setpriority(PRIO_PROCESS, tid, -6) == 0) {
     } else {
-        LOGI("compositor: setpriority failed: %s (non-fatal)", strerror(errno));
+        LOGI("compositor: setpriority failed %s", strerror(errno));
     }
 
     pin_to_big_cores("compositor");
 
     while (1) {
+        if (atomic_load(&g_compositor_gen) != my_gen) {
+            LOGI("compositor: generation changed, thread exiting");
+            return NULL;
+        }
         LOGI("compositor: waiting for Box64 connection on @polydroid_frame_bridge");
 
         int client_fd = accept(g_compositor_fd, NULL, NULL);
@@ -317,6 +322,11 @@ static void* compositor_thread(void* arg) {
             LOGE("compositor: accept failed: %s", strerror(errno));
             if (errno == EINVAL || errno == EBADF) return NULL;
             continue;
+        }
+        if (atomic_load(&g_compositor_gen) != my_gen) {
+            LOGI("compositor: generation changed, dropping connection and exiting");
+            close(client_fd);
+            return NULL;
         }
         LOGI("compositor: Box64 connected (fd=%d)", client_fd);
 
@@ -346,20 +356,20 @@ static void* compositor_thread(void* arg) {
             };
             int ret = AHardwareBuffer_allocate(&desc, &g_comp_ahbs[i]);
             if (ret != 0 && format == AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM) {
-                LOGE("compositor: BGRA alloc[%u] failed: %d, falling back to RGBA", i, ret);
+                LOGE("compositor: BGRA alloc[%u] failed! %d, falling back to RGBA", i, ret);
                 format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
                 desc.format = format;
                 ret = AHardwareBuffer_allocate(&desc, &g_comp_ahbs[i]);
             }
             if (ret != 0) {
-                LOGE("compositor: AHardwareBuffer_allocate[%u] failed: %d", i, ret);
+                LOGE("compositor: AHardwareBuffer_allocate[%u] failed! %d", i, ret);
                 alloc_failed = 1;
                 break;
             }
 
             ret = AHardwareBuffer_sendHandleToUnixSocket(g_comp_ahbs[i], client_fd);
             if (ret != 0) {
-                LOGE("compositor: AHardwareBuffer_sendHandleToUnixSocket[%u] failed: %d", i, ret);
+                LOGE("compositor: AHardwareBuffer_sendHandleToUnixSocket[%u] failed! %d", i, ret);
                 alloc_failed = 1;
                 break;
             }
@@ -538,6 +548,11 @@ static void* compositor_thread(void* arg) {
         LOGI("compositor: client disconnected after %d frames, awaiting reconnect", frame_count);
         close(client_fd);
 
+        if (atomic_load(&g_compositor_gen) != my_gen) {
+            LOGI("compositor: generation changed, thread exiting");
+            return NULL;
+        }
+
         if (g_surface_ctl) {
             txn = ASurfaceTransaction_create();
             ASurfaceTransaction_setVisibility(txn, g_surface_ctl, 0);
@@ -568,7 +583,9 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartFrameCompositor(
         return JNI_FALSE;
     }
 
+    int gen = atomic_fetch_add(&g_compositor_gen, 1) + 1;
     if (g_compositor_fd >= 0) {
+        shutdown(g_compositor_fd, SHUT_RDWR);
         close(g_compositor_fd);
         g_compositor_fd = -1;
     }
@@ -587,17 +604,21 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartFrameCompositor(
     strncpy(addr.sun_path + 1, name, sizeof(addr.sun_path) - 2);
     socklen_t addrlen = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name);
 
-    if (bind(g_compositor_fd, (struct sockaddr*)&addr, addrlen) < 0) {
-        LOGE("compositor: bind @%s: %s, retrying...", name, strerror(errno));
-        close(g_compositor_fd);
-        g_compositor_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (g_compositor_fd < 0 ||
-            bind(g_compositor_fd, (struct sockaddr*)&addr, addrlen) < 0) {
-            LOGE("compositor: bind @%s: %s (retry failed)", name, strerror(errno));
-            if (g_compositor_fd >= 0) close(g_compositor_fd);
-            g_compositor_fd = -1;
-            return JNI_FALSE;
+    int bound = 0;
+    for (int i = 0; i < 40; i++) {
+        if (bind(g_compositor_fd, (struct sockaddr*)&addr, addrlen) == 0) {
+            bound = 1;
+            break;
         }
+        if (errno != EADDRINUSE) break;
+        if (i == 0) LOGE("compositor: bind @%s: %s, waiting for old socket to release...", name, strerror(errno));
+        usleep(50000);
+    }
+    if (!bound) {
+        LOGE("compositor: bind @%s: %s (gave up)", name, strerror(errno));
+        close(g_compositor_fd);
+        g_compositor_fd = -1;
+        return JNI_FALSE;
     }
     if (listen(g_compositor_fd, 1) < 0) {
         LOGE("compositor: listen: %s", strerror(errno));
@@ -609,7 +630,7 @@ Java_com_cetotos_polydroid2_GameActivity_nativeStartFrameCompositor(
     LOGI("compositor: listening on @%s", name);
 
     pthread_t t;
-    pthread_create(&t, NULL, compositor_thread, NULL);
+    pthread_create(&t, NULL, compositor_thread, (void*)(intptr_t)gen);
     pthread_detach(t);
 
     return JNI_TRUE;

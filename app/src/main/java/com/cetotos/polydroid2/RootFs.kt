@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 object RootFs {
     private const val TAG = "PolyDroid2"
     private const val VERSION = 8
-    private const val LIBS_VERSION = 9
+    private const val LIBS_VERSION = 10
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",

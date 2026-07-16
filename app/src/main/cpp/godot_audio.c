@@ -104,7 +104,7 @@ int snd_pcm_hw_params(snd_pcm_t *p, snd_pcm_hw_params_t *h) {
         hdr[10] = 0; hdr[11] = 0;
         if (write_all(p->fd, hdr, sizeof(hdr)) == 0) {
             p->started = 1;
-            int sndbuf = 262144;
+            int sndbuf = 8192;
             setsockopt(p->fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
             int fl = fcntl(p->fd, F_GETFL, 0);
             if (fl >= 0) fcntl(p->fd, F_SETFL, fl | O_NONBLOCK);

@@ -4,6 +4,7 @@
  */
 
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1138,7 +1139,7 @@ static int connect_and_request_ahbs(uint32_t width, uint32_t height,
 
     // send buffer request
     uint32_t req[4] = { width, height, ahb_format, count };
-    if (send(fd, req, sizeof(req), 0) != sizeof(req)) {
+    if (send(fd, req, sizeof(req), MSG_NOSIGNAL) != sizeof(req)) {
         LOGE("Failed to send buffer request: %s", strerror(errno));
         close(fd);
         g_compositor_sock = -1;
@@ -1187,7 +1188,7 @@ static int connect_and_request_ahbs(uint32_t width, uint32_t height,
     strncpy(meta.gpu_name, g_gpu_name, 63);
     meta.api_ver = g_vk_api_version;
     meta.drv_ver = g_vk_driver_version;
-    if (send(fd, &meta, sizeof(meta), 0) != sizeof(meta)) {
+    if (send(fd, &meta, sizeof(meta), MSG_NOSIGNAL) != sizeof(meta)) {
         LOGE("Failed to send Vulkan metadata: %s", strerror(errno));
     } else {
         LOGI("Sent Vulkan metadata: %s, API %u.%u.%u",
@@ -1811,34 +1812,6 @@ static VkResult shim_vkQueuePresentKHR(
     static uint32_t unity_fps = 0;
     static struct timespec fps_start = {0, 0};
 
-    static struct timespec last_present = {0, 0};
-    long max_fps_interval_ns = g_max_fps_interval_ns;
-    if (max_fps_interval_ns == 0 &&
-        (g_present_mode == VK_PRESENT_MODE_FIFO_KHR ||
-         g_present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR))
-        max_fps_interval_ns = g_vsync_interval_ns;
-    if (max_fps_interval_ns > 0) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (last_present.tv_sec != 0 || last_present.tv_nsec != 0) {
-            long target_s = last_present.tv_sec + (last_present.tv_nsec + max_fps_interval_ns) / 1000000000L;
-            long target_ns = (last_present.tv_nsec + max_fps_interval_ns) % 1000000000L;
-            long wait_ns = (target_s - now.tv_sec) * 1000000000L + (target_ns - now.tv_nsec);
-            if (wait_ns > 0 && wait_ns < 500000000L) {
-                struct timespec target = { .tv_sec = target_s, .tv_nsec = target_ns };
-                while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &target, NULL) == EINTR) {}
-            }
-            if (wait_ns > 0) {
-                last_present.tv_sec = target_s;
-                last_present.tv_nsec = target_ns;
-            } else {
-                last_present = now;
-            }
-        } else {
-            last_present = now;
-        }
-    }
-
     if (!g_queue) {
         g_queue = queue;
         LOGI("Captured VkQueue: %p", (void*)queue);
@@ -2003,7 +1976,81 @@ static VkResult shim_vkQueuePresentKHR(
         LOGI("Presented %d frames (Unity FPS: %u)", frame_count, unity_fps);
     }
 
+    static struct timespec last_present = {0, 0};
+    long max_fps_interval_ns = g_max_fps_interval_ns;
+    if (max_fps_interval_ns == 0 &&
+        (g_present_mode == VK_PRESENT_MODE_FIFO_KHR ||
+         g_present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR))
+        max_fps_interval_ns = g_vsync_interval_ns;
+    if (max_fps_interval_ns > 0) {
+        if (last_present.tv_sec != 0 || last_present.tv_nsec != 0) {
+            long target_s = last_present.tv_sec + (last_present.tv_nsec + max_fps_interval_ns) / 1000000000L;
+            long target_ns = (last_present.tv_nsec + max_fps_interval_ns) % 1000000000L;
+            long wait_ns = (target_s - now.tv_sec) * 1000000000L + (target_ns - now.tv_nsec);
+            if (wait_ns > 0 && wait_ns < 500000000L) {
+                struct timespec target = { .tv_sec = target_s, .tv_nsec = target_ns };
+                while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &target, NULL) == EINTR) {}
+            }
+            if (wait_ns > 0) {
+                last_present.tv_sec = target_s;
+                last_present.tv_nsec = target_ns;
+            } else {
+                last_present = now;
+            }
+        } else {
+            last_present = now;
+        }
+    }
+
     return VK_SUCCESS;
+}
+
+typedef VkResult (VKAPI_PTR *PFN_vkCreateGraphicsPipelines_t)(VkDevice, VkPipelineCache, uint32_t, const VkGraphicsPipelineCreateInfo*, const VkAllocationCallbacks*, VkPipeline*);
+typedef VkResult (VKAPI_PTR *PFN_vkCreateComputePipelines_t)(VkDevice, VkPipelineCache, uint32_t, const VkComputePipelineCreateInfo*, const VkAllocationCallbacks*, VkPipeline*);
+static PFN_vkCreateGraphicsPipelines_t real_createGraphicsPipelines = NULL;
+static PFN_vkCreateComputePipelines_t real_createComputePipelines = NULL;
+static pthread_mutex_t g_pipeline_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int g_pipeline_workaround = -1;
+
+static int pipeline_workaround_active(void) {
+    if (g_pipeline_workaround < 0) {
+        g_pipeline_workaround = (g_using_system_driver && strstr(g_gpu_name, "PowerVR")) ? 1 : 0;
+        if (g_pipeline_workaround)
+            LOGI("PowerVR: serializing pipeline creation, bypassing app pipeline cache");
+    }
+    return g_pipeline_workaround;
+}
+
+static VkResult shim_vkCreateGraphicsPipelines(
+    VkDevice device,
+    VkPipelineCache pipelineCache,
+    uint32_t createInfoCount,
+    const VkGraphicsPipelineCreateInfo* pCreateInfos,
+    const VkAllocationCallbacks* pAllocator,
+    VkPipeline* pPipelines)
+{
+    if (!pipeline_workaround_active())
+        return real_createGraphicsPipelines(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
+    pthread_mutex_lock(&g_pipeline_mutex);
+    VkResult r = real_createGraphicsPipelines(device, VK_NULL_HANDLE, createInfoCount, pCreateInfos, pAllocator, pPipelines);
+    pthread_mutex_unlock(&g_pipeline_mutex);
+    return r;
+}
+
+static VkResult shim_vkCreateComputePipelines(
+    VkDevice device,
+    VkPipelineCache pipelineCache,
+    uint32_t createInfoCount,
+    const VkComputePipelineCreateInfo* pCreateInfos,
+    const VkAllocationCallbacks* pAllocator,
+    VkPipeline* pPipelines)
+{
+    if (!pipeline_workaround_active())
+        return real_createComputePipelines(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
+    pthread_mutex_lock(&g_pipeline_mutex);
+    VkResult r = real_createComputePipelines(device, VK_NULL_HANDLE, createInfoCount, pCreateInfos, pAllocator, pPipelines);
+    pthread_mutex_unlock(&g_pipeline_mutex);
+    return r;
 }
 
 static VkResult shim_vkCreateDevice(
@@ -2199,9 +2246,21 @@ static PFN_vkVoidFunction shim_vkGetDeviceProcAddr(VkDevice device, const char* 
         real_vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)
             real_vkGetInstanceProcAddr(g_instance, "vkGetDeviceProcAddr");
     }
-    if (real_vkGetDeviceProcAddr)
-        return real_vkGetDeviceProcAddr(device, pName);
-    return NULL;
+    if (!real_vkGetDeviceProcAddr)
+        return NULL;
+    if (strcmp(pName, "vkCreateGraphicsPipelines") == 0) {
+        real_createGraphicsPipelines = (PFN_vkCreateGraphicsPipelines_t)
+            real_vkGetDeviceProcAddr(device, pName);
+        return real_createGraphicsPipelines
+            ? (PFN_vkVoidFunction)shim_vkCreateGraphicsPipelines : NULL;
+    }
+    if (strcmp(pName, "vkCreateComputePipelines") == 0) {
+        real_createComputePipelines = (PFN_vkCreateComputePipelines_t)
+            real_vkGetDeviceProcAddr(device, pName);
+        return real_createComputePipelines
+            ? (PFN_vkVoidFunction)shim_vkCreateComputePipelines : NULL;
+    }
+    return real_vkGetDeviceProcAddr(device, pName);
 }
 
 PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
@@ -2254,10 +2313,21 @@ PFN_vkVoidFunction vkGetInstanceProcAddr(VkInstance instance, const char* pName)
     if (strcmp(pName, "vkQueuePresentKHR") == 0)
         return (PFN_vkVoidFunction)shim_vkQueuePresentKHR;
 
-    if (real_vkGetInstanceProcAddr)
-        return real_vkGetInstanceProcAddr(instance, pName);
-
-    return NULL;
+    if (!real_vkGetInstanceProcAddr)
+        return NULL;
+    if (strcmp(pName, "vkCreateGraphicsPipelines") == 0) {
+        real_createGraphicsPipelines = (PFN_vkCreateGraphicsPipelines_t)
+            real_vkGetInstanceProcAddr(instance, pName);
+        return real_createGraphicsPipelines
+            ? (PFN_vkVoidFunction)shim_vkCreateGraphicsPipelines : NULL;
+    }
+    if (strcmp(pName, "vkCreateComputePipelines") == 0) {
+        real_createComputePipelines = (PFN_vkCreateComputePipelines_t)
+            real_vkGetInstanceProcAddr(instance, pName);
+        return real_createComputePipelines
+            ? (PFN_vkVoidFunction)shim_vkCreateComputePipelines : NULL;
+    }
+    return real_vkGetInstanceProcAddr(instance, pName);
 }
 
 VkResult vkCreateInstance(

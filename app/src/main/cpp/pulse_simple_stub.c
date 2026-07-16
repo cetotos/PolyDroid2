@@ -167,6 +167,8 @@ pa_simple *pa_simple_new(
                 close(s->fd);
                 s->fd = -1;
             } else {
+                int sndbuf = 8192;
+                setsockopt(s->fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
                 STUB_LOG("audio bridge connected rate=%u ch=%u fmt=%d",
                          ss->rate, ss->channels, ss->format);
             }

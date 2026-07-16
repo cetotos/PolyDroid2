@@ -169,16 +169,22 @@ object LogReporter {
     }
 
     private fun readLogcat(): String {
+        val main = runLogcat(
+            "logcat", "-d", "-v", "time",
+            "PolyDroid2:*", "PolyDroid2-Vulkan:*", "PolyDroid2-window:*",
+            "Box64:*", "BOX64:*",
+            "*:S"
+        ) ?: "No matching logcat entries found"
+        val crash = runLogcat("logcat", "-d", "-b", "crash", "-v", "time")
+        return if (crash == null) main else "$main\n\n----- crash buffer -----\n$crash"
+    }
+
+    private fun runLogcat(vararg cmd: String): String? {
         return try {
-            val proc = Runtime.getRuntime().exec(arrayOf(
-                "logcat", "-d", "-v", "time",
-                "PolyDroid2:*", "PolyDroid2-Vulkan:*", "PolyDroid2-window:*",
-                "Box64:*", "BOX64:*",
-                "*:S"
-            ))
+            val proc = Runtime.getRuntime().exec(cmd)
             val lines = proc.inputStream.bufferedReader().readLines()
             proc.waitFor()
-            if (lines.isEmpty()) return "No matching logcat entries found"
+            if (lines.isEmpty()) return null
             val start = (lines.size - LOGCAT_TAIL).coerceAtLeast(0)
             lines.subList(start, lines.size).joinToString("\n")
         } catch (e: Exception) {

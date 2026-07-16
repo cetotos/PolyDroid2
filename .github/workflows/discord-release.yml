@@ -2,7 +2,12 @@ name: discord-release
 
 on:
   release:
-    types: [published]
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag to announce
+        required: true
 
 jobs:
   notify:
@@ -13,12 +18,15 @@ jobs:
       - name: Send Discord release message
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          RELEASE_TITLE: ${{ github.event.release.name }}
-          VERSION: ${{ github.event.release.tag_name }}
-          RELEASE_BODY: ${{ github.event.release.body }}
-          PUBLISHED_DATE: ${{ github.event.release.published_at }}
-          RELEASE_URL: ${{ github.event.release.html_url }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
+          gh release view "$TAG" --json name,tagName,body,publishedAt,url > release.json
+          export RELEASE_TITLE=$(jq -r '.name' release.json)
+          export VERSION=$(jq -r '.tagName' release.json)
+          export RELEASE_BODY=$(jq -r '.body' release.json)
+          export PUBLISHED_DATE=$(jq -r '.publishedAt' release.json)
+          export RELEASE_URL=$(jq -r '.url' release.json)
           python3 - <<'PY' | curl -fsS -H "Content-Type: application/json" -d @- "$WEBHOOK"
           import json, os, re
           from datetime import datetime
