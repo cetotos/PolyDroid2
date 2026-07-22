@@ -73,9 +73,13 @@ class ImeCaptureView @JvmOverloads constructor(
     }
 
     fun enableKeyboard() {
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         enable()
-        imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+        post {
+            if (!isEnabled) return@post
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.restartInput(this)
+            imm.showSoftInput(this, 0)
+        }
     }
 
     fun disableKeyboard() {

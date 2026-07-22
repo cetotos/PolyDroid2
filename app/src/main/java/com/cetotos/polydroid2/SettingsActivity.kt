@@ -163,7 +163,7 @@ class SettingsActivity : AppCompatActivity() {
             "Y" to 21, "Z" to 44,
             "1" to 2, "2" to 3, "3" to 4, "4" to 5, "5" to 6,
             "6" to 7, "7" to 8, "8" to 9, "9" to 10, "0" to 11,
-            "Tab" to 15, "Enter" to 28, "Esc" to 1,
+            "Space" to 57, "Tab" to 15, "Enter" to 28, "Esc" to 1,
             "Shift" to 42, "Ctrl" to 29, "Alt" to 56,
             "F1" to 59, "F2" to 60, "F3" to 61, "F4" to 62,
         )

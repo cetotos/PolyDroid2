@@ -2,7 +2,7 @@ name: discord-release
 
 on:
   release:
-    types: [released]
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -11,6 +11,7 @@ on:
 
 jobs:
   notify:
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

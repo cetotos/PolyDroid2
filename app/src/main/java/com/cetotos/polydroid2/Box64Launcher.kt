@@ -146,7 +146,8 @@ object Box64Launcher {
                     "_custom_features=\"touchscreen\"\n\n" +
                     "[debug]\n\nsettings/stdout/verbose_stdout=false\n\n" +
                     "[display]\n\nwindow/subwindows/embed_subwindows=true\n\n" +
-                    "[input_devices]\n\npointing/emulate_touch_from_mouse=true\n"
+                    "[input_devices]\n\npointing/emulate_touch_from_mouse=true\n\n" +
+                    "[rendering]\n\nrenderer/rendering_method=\"mobile\"\nrenderer/rendering_method.mobile=\"mobile\"\n"
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "failed to write override.cfg: ${e.message}")
@@ -158,6 +159,10 @@ object Box64Launcher {
         val x86LibDir = File("$rootPath/usr/lib/x86_64-linux-gnu")
 
         val safeMode = SettingsActivity.isSafeMode(ctx)
+        val peakCpuKHz = File("/sys/devices/system/cpu").listFiles { f -> f.name.matches(Regex("cpu\\d+")) }
+            ?.maxOfOrNull { c -> try { File(c, "cpufreq/cpuinfo_max_freq").readText().trim().toLong() } catch (_: Exception) { 0L } } ?: 0L
+        val lowEnd = !safeMode && peakCpuKHz in 1 until 2_500_000L
+        if (lowEnd) Log.i(TAG, "Low end mode active. peak cpu frequency ${peakCpuKHz}kHz")
         val env = buildMap {
             put("HOME", "$rootPath/home/user")
             put("USER", "user")
@@ -205,7 +210,7 @@ object Box64Launcher {
             put("BOX64_CRASHHANDLER", "1")
             put("BOX64_DYNAREC", "1")
             if (isPolytoria2) {
-                put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else "2")
+                put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else if (lowEnd) "1" else "2")
                 put("BOX64_DYNAREC_STRONGMEM", if (safeMode) "2" else "1")
                 put("BOX64_DYNAREC_WEAKBARRIER", if (safeMode) "0" else "1")
                 put("BOX64_DYNAREC_FASTNAN", if (safeMode) "0" else "1")
@@ -213,7 +218,7 @@ object Box64Launcher {
                 put("BOX64_DYNAREC_SAFEFLAGS", if (safeMode) "2" else "1")
                 put("BOX64_DYNAREC_CALLRET", if (safeMode) "0" else "1")
                 put("BOX64_DYNAREC_SEP", if (safeMode) "0" else "1")
-                put("BOX64_DYNAREC_FORWARD", if (safeMode) "128" else "1024")
+                put("BOX64_DYNAREC_FORWARD", if (safeMode || lowEnd) "128" else "1024")
                 put("BOX64_DYNAREC_ALIGNED_ATOMICS", if (safeMode) "0" else "1")
                 put("BOX64_DYNAREC_PAUSE", "1")
                 put("BOX64_DYNAREC_WAIT", "1")
@@ -226,7 +231,7 @@ object Box64Launcher {
                 put("BOX64_DYNAREC_SAFEFLAGS", "1")
                 put("BOX64_DYNAREC_CALLRET", if (safeMode) "0" else "1")
                 put("BOX64_DYNAREC_SEP", if (safeMode) "1" else "2")
-                put("BOX64_DYNAREC_FORWARD", if (safeMode) "128" else "512")
+                put("BOX64_DYNAREC_FORWARD", if (safeMode || lowEnd) "128" else "512")
                 put("BOX64_DYNAREC_ALIGNED_ATOMICS", "1")
                 put("BOX64_DYNAREC_WAIT", "0")
                 put("BOX64_DYNAREC_DIRTY", "0")
@@ -279,14 +284,21 @@ object Box64Launcher {
             put("OPENSSL_ia32cap", "0:0:0:0")
             if (isPolytoria2) put("POLYDROID_POLYTORIA2", "1") // the native side has the flag aswell
             put("DOTNET_gcServer", "0")
-            put("DOTNET_gcConcurrent", "0")
             val totalRam = run {
                 val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
                 val mi = android.app.ActivityManager.MemoryInfo()
                 am.getMemoryInfo(mi)
                 mi.totalMem
             }
-            put("DOTNET_GCgen0size", "0x%x".format(if (totalRam >= 6L shl 30) 0x10000000L else 0x8000000L))
+            val veryLowMem = totalRam < 4_500_000_000L
+            val lowMem = totalRam < 6_500_000_000L
+            put("DOTNET_gcConcurrent", if (lowMem) "1" else "0")
+            if (lowMem) put("DOTNET_GCConserveMemory", if (veryLowMem) "7" else "5")
+            put("DOTNET_GCgen0size", "0x%x".format(when {
+                veryLowMem -> 0x4000000L
+                totalRam >= 6L shl 30 -> 0x10000000L
+                else -> 0x8000000L
+            }))
             put("DOTNET_GCNoAffinitize", "1")
             put("DOTNET_GCCpuGroup", "0")
             put("DOTNET_gcConservative", "1")
@@ -295,7 +307,12 @@ object Box64Launcher {
             put("DOTNET_GCForceCompact", "0")
             put("DOTNET_GCLatencyLevel", "0")
             put("DOTNET_gcAllowVeryLargeObjects", "1")
-            val gcHeapLimit = (totalRam * 45 / 100).coerceIn(1L shl 30, 3L shl 30)
+            put("DOTNET_GCRetainVM", "1")
+            val gcHeapLimit = when {
+                veryLowMem -> 768L shl 20
+                lowMem -> 1L shl 30
+                else -> (totalRam * 45 / 100).coerceIn(1L shl 30, 3L shl 30)
+            }
             put("DOTNET_GCHeapHardLimit", "0x%x".format(gcHeapLimit))
             put("DOTNET_DebugWriteToStdErr", "1")
             put("DOTNET_EnableDiagnostics", "1")

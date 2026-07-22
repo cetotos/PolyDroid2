@@ -33,10 +33,6 @@ object Polytoria2Prefs {
         "Low" to "Low", "Medium" to "Medium", "High" to "High",
         "Ultra" to "Ultra", "Photo" to "Photo", "Custom" to "Custom",
     )
-    val RENDERING_METHOD_OPTIONS = listOf(
-        "Auto" to "Auto", "Standard" to "Standard",
-        "Performance" to "Performance", "Compatibility" to "Compatibility",
-    )
     val MSAA_OPTIONS = listOf(
         "Disabled" to "Off", "X2" to "2x", "X4" to "4x", "X8" to "8x",
     )
@@ -59,7 +55,7 @@ object Polytoria2Prefs {
         FPS_CAP to 0,
         UI_SCALE to 1f,
         PRESET to "Medium",
-        RENDERING_METHOD to "Auto",
+        RENDERING_METHOD to "Performance",
         RENDER_SCALE to 1f,
         MSAA to "X2",
         SHADOW_QUALITY to "Medium",
@@ -115,6 +111,7 @@ object Polytoria2Prefs {
         } catch (e: Exception) {
             Log.w(TAG, "failed to read settings_client.json: ${e.message}")
         }
+        out[RENDERING_METHOD] = "Performance"
         return out
     }
 

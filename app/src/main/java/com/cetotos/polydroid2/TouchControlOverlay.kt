@@ -129,6 +129,8 @@ class TouchControlOverlay(
     private var cameraMoved = false
     private var cameraDeltaX = 0f
     private var cameraDeltaY = 0f
+    private var camVX = 0f
+    private var camVY = 0f
 
     private var jumpPointerId = -1
 
@@ -527,6 +529,8 @@ class TouchControlOverlay(
             val cy = renderHeight / 2
             sendInput(INPUT_MOTION, 0, cx, cy)
             sendInput(INPUT_BUTTON_DOWN, MOUSE_RIGHT, cx, cy)
+            camVX = cx.toFloat()
+            camVY = cy.toFloat()
             cameraDeltaX = cx.toFloat()
             cameraDeltaY = cy.toFloat()
         }
@@ -536,10 +540,17 @@ class TouchControlOverlay(
             val cy = renderHeight / 2
             val dx = (x - cameraLastX) / width * renderWidth * cameraSensitivity
             val dy = (y - cameraLastY) / height * renderHeight * cameraSensitivity
-            sendInput(INPUT_MOTION, 0, (cx + dx).toInt(), (cy + dy).toInt())
-            sendInput(INPUT_MOTION, 0, cx, cy)
-            cameraDeltaX = cx.toFloat()
-            cameraDeltaY = cy.toFloat()
+            camVX += dx
+            camVY += dy
+            val margin = renderWidth / 8
+            if (camVX < margin || camVX > renderWidth - margin ||
+                camVY < margin || camVY > renderHeight - margin) {
+                camVX = cx.toFloat()
+                camVY = cy.toFloat()
+            }
+            sendInput(INPUT_MOTION, 0, camVX.toInt(), camVY.toInt())
+            cameraDeltaX = camVX
+            cameraDeltaY = camVY
         }
 
         cameraLastX = x

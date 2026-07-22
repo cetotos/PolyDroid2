@@ -21,7 +21,6 @@ class Polytoria2GraphicsDialog(private val ctx: Context) {
     private var applyingPreset = false
 
     private lateinit var presetDropdown: AutoCompleteTextView
-    private lateinit var renderingDropdown: AutoCompleteTextView
     private lateinit var msaaDropdown: AutoCompleteTextView
     private lateinit var shadowDropdown: AutoCompleteTextView
     private lateinit var fpsPresetDropdown: AutoCompleteTextView
@@ -94,10 +93,6 @@ class Polytoria2GraphicsDialog(private val ctx: Context) {
         parent.addView(dropdownLayout("UI scale", uiScaleDropdown), layoutParams().apply { topMargin = dp(12) })
     }
     private fun buildGraphics(parent: LinearLayout) {
-        renderingDropdown = enumDropdown(Polytoria2Prefs.RENDERING_METHOD_OPTIONS) { name ->
-            values[Polytoria2Prefs.RENDERING_METHOD] = name
-        }
-        parent.addView(dropdownLayout("Rendering method", renderingDropdown), layoutParams())
         renderScaleField = SettingsUi.sliderField(ctx, "Render scale", 0.2f, 1f, 0.05f) { v ->
             "${(v * 100).roundToInt()}%"
         }
@@ -191,7 +186,6 @@ class Polytoria2GraphicsDialog(private val ctx: Context) {
 
     private fun loadIntoUi() {
         presetDropdown.setText(labelFor(Polytoria2Prefs.PRESET_OPTIONS, str(Polytoria2Prefs.PRESET)), false)
-        renderingDropdown.setText(labelFor(Polytoria2Prefs.RENDERING_METHOD_OPTIONS, str(Polytoria2Prefs.RENDERING_METHOD)), false)
         msaaDropdown.setText(labelFor(Polytoria2Prefs.MSAA_OPTIONS, str(Polytoria2Prefs.MSAA)), false)
         shadowDropdown.setText(labelFor(Polytoria2Prefs.SHADOW_QUALITY_OPTIONS, str(Polytoria2Prefs.SHADOW_QUALITY)), false)
         fpsPresetDropdown.setText(labelFor(Polytoria2Prefs.FPS_PRESET_OPTIONS, str(Polytoria2Prefs.FPS_PRESET)), false)
