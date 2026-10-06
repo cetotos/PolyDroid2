@@ -31,8 +31,8 @@ android {
         applicationId = "com.cetotos.polydroid2"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.9.3b"
+        versionCode = 6
+        versionName = "0.9.4b"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
     }
