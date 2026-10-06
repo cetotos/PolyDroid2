@@ -87,6 +87,14 @@ class LoginActivity : AppCompatActivity() {
 
         thread {
             try {
+                if (RootFs.needsExtraction(this)) {
+                    RootFs.extractAll(this) { pct, _, _, label ->
+                        runOnUiThread {
+                            dialog.setTitle(label)
+                            bar.progress = pct
+                        }
+                    }
+                }
                 ClientDownloader.prepare(this, token, channel) { pct, label ->
                     runOnUiThread {
                         dialog.setTitle(label)

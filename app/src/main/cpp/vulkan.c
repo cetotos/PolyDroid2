@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <errno.h>
+#include <poll.h>
 #include <android/native_window.h>
 #include <android/hardware_buffer.h>
 #include <android/log.h>
@@ -775,6 +776,36 @@ static int g_swizzle_views = 0;
 static uint32_t g_swapchain_width = 0;
 static uint32_t g_swapchain_height = 0;
 static int g_compositor_sock = -1;
+static int g_vsync_inflight = 0;
+static int g_vsync_timeouts = 0;
+static int g_vsync_broken = 0;
+
+static int vsync_paced(void) {
+    if (g_vsync_broken || g_vsync_interval_ns <= 0) return 0;
+    return g_max_fps_interval_ns > 0 && g_max_fps_interval_ns <= g_vsync_interval_ns + 200000;
+}
+
+static void vsync_wait_slot(void) {
+    uint8_t b[32];
+    while (recv(g_compositor_sock, b, sizeof(b), MSG_DONTWAIT) > 0) {
+        g_vsync_inflight = 0;
+        if (g_vsync_broken) {
+            g_vsync_broken = 0;
+            g_vsync_timeouts = 0;
+            LOGI("vsync acks resumed");
+        }
+    }
+    if (!g_vsync_inflight || !vsync_paced()) return;
+    struct pollfd pfd = { .fd = g_compositor_sock, .events = POLLIN };
+    if (poll(&pfd, 1, 50) > 0) {
+        while (recv(g_compositor_sock, b, sizeof(b), MSG_DONTWAIT) > 0) {}
+        g_vsync_timeouts = 0;
+    } else if (++g_vsync_timeouts >= 3) {
+        g_vsync_broken = 1;
+        LOGI("vsync acks missing! falling back to timer pacing");
+    }
+    g_vsync_inflight = 0;
+}
 
 typedef VkResult (*PFN_vkCreateImage)(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage*);
 typedef void (*PFN_vkDestroyImage)(VkDevice, VkImage, const VkAllocationCallbacks*);
@@ -1136,6 +1167,8 @@ static int connect_and_request_ahbs(uint32_t width, uint32_t height,
     }
     LOGI("Connected to frame compositor @%s", name);
     g_compositor_sock = fd;
+    g_vsync_inflight = 0;
+    g_vsync_timeouts = 0;
 
     // send buffer request
     uint32_t req[4] = { width, height, ahb_format, count };
@@ -1938,7 +1971,9 @@ static VkResult shim_vkQueuePresentKHR(
                 c->cmsg_len = CMSG_LEN(sizeof(int));
                 memcpy(CMSG_DATA(c), &acquireFd, sizeof(int));
             }
+            vsync_wait_slot();
             ssize_t sent = sendmsg(g_compositor_sock, &mh, MSG_NOSIGNAL);
+            if (sent == (ssize_t)sizeof(msg)) g_vsync_inflight = 1;
             if (acquireFd >= 0) close(acquireFd);
             if (sent != (ssize_t)sizeof(msg)) {
                 LOGE("Failed to send frame to compositor: %s", strerror(errno));
@@ -1982,7 +2017,9 @@ static VkResult shim_vkQueuePresentKHR(
         (g_present_mode == VK_PRESENT_MODE_FIFO_KHR ||
          g_present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR))
         max_fps_interval_ns = g_vsync_interval_ns;
-    if (max_fps_interval_ns > 0) {
+    if (max_fps_interval_ns > 0 && vsync_paced() && g_compositor_sock >= 0) {
+        last_present = now;
+    } else if (max_fps_interval_ns > 0) {
         if (last_present.tv_sec != 0 || last_present.tv_nsec != 0) {
             long target_s = last_present.tv_sec + (last_present.tv_nsec + max_fps_interval_ns) / 1000000000L;
             long target_ns = (last_present.tv_nsec + max_fps_interval_ns) % 1000000000L;

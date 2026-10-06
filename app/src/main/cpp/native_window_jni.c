@@ -18,6 +18,8 @@
 #include <sched.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <android/choreographer.h>
+#include <android/looper.h>
 
 #define TAG "PolyDroid2-window"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -299,6 +301,73 @@ static int pin_to_big_cores(const char* tag) {
     return count;
 }
 
+static pthread_mutex_t g_vsync_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_vsync_fd = -1;
+static _Atomic int g_vsync_applied = 0;
+static _Atomic int g_vsync_started = 0;
+static int g_vsync_armed = 0;
+static ALooper* _Atomic g_vsync_looper = NULL;
+
+static void vsync_cb(int64_t frame_time_nanos, void* data) {
+    (void)frame_time_nanos; (void)data;
+    pthread_mutex_lock(&g_vsync_lock);
+    int fd = g_vsync_fd;
+    if (fd >= 0 && atomic_exchange(&g_vsync_applied, 0)) {
+        uint8_t v = 'V';
+        send(fd, &v, 1, MSG_DONTWAIT | MSG_NOSIGNAL);
+    }
+    pthread_mutex_unlock(&g_vsync_lock);
+    if (fd >= 0) {
+        AChoreographer_postFrameCallback64(AChoreographer_getInstance(), vsync_cb, NULL);
+    } else {
+        g_vsync_armed = 0;
+    }
+}
+
+static void* vsync_thread(void* arg) {
+    (void)arg;
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    setpriority(PRIO_PROCESS, tid, -6);
+    ALooper* looper = ALooper_prepare(0);
+    AChoreographer* ch = AChoreographer_getInstance();
+    if (!ch) {
+        LOGE("compositor: no choreographer! vsync acks disabled");
+        return NULL;
+    }
+    ALooper_acquire(looper);
+    atomic_store(&g_vsync_looper, looper);
+    while (1) {
+        pthread_mutex_lock(&g_vsync_lock);
+        int want = g_vsync_fd >= 0;
+        pthread_mutex_unlock(&g_vsync_lock);
+        if (want && !g_vsync_armed) {
+            g_vsync_armed = 1;
+            AChoreographer_postFrameCallback64(ch, vsync_cb, NULL);
+        }
+        ALooper_pollOnce(-1, NULL, NULL, NULL);
+    }
+    return NULL;
+}
+
+static void vsync_attach(int fd) {
+    if (!atomic_exchange(&g_vsync_started, 1)) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, vsync_thread, NULL) == 0) pthread_detach(t);
+    }
+    pthread_mutex_lock(&g_vsync_lock);
+    g_vsync_fd = fd;
+    atomic_store(&g_vsync_applied, 0);
+    pthread_mutex_unlock(&g_vsync_lock);
+    ALooper* looper = atomic_load(&g_vsync_looper);
+    if (looper) ALooper_wake(looper);
+}
+
+static void vsync_detach(void) {
+    pthread_mutex_lock(&g_vsync_lock);
+    g_vsync_fd = -1;
+    pthread_mutex_unlock(&g_vsync_lock);
+}
+
 static void* compositor_thread(void* arg) {
     int my_gen = (int)(intptr_t)arg;
 
@@ -454,6 +523,7 @@ static void* compositor_thread(void* arg) {
         int geometry_set = 0;
 
         txn = ASurfaceTransaction_create();
+        vsync_attach(client_fd);
 
         while (1) {
             uint32_t msg[2];
@@ -529,6 +599,7 @@ static void* compositor_thread(void* arg) {
                 geometry_set = 1;
             }
             ASurfaceTransaction_apply(txn);
+            atomic_store(&g_vsync_applied, 1);
 
             frame_count++;
             atomic_store(&g_comp_total_frames, frame_count);
@@ -544,6 +615,7 @@ static void* compositor_thread(void* arg) {
         }
 
         ASurfaceTransaction_delete(txn);
+        vsync_detach();
 
         LOGI("compositor: client disconnected after %d frames, awaiting reconnect", frame_count);
         close(client_fd);

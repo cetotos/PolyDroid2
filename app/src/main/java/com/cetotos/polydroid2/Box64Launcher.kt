@@ -93,6 +93,12 @@ object Box64Launcher {
         File(etcDir, "group").takeIf { !it.exists() }?.writeText(
             "root:x:0:\nuser:x:1000:\n"
         )
+        File(etcDir, "machine-id").let { f ->
+            val cur = try { f.readText().trim() } catch (_: Exception) { "" }
+            if (!Regex("[0-9a-f]{32}").matches(cur)) {
+                f.writeText(java.util.UUID.randomUUID().toString().replace("-", "") + "\n")
+            }
+        }
         val hostsBuilder = StringBuilder("127.0.0.1 localhost\n")
         for (hostname in listOf("api.polytoria.com", "polytoria.com")) {
             try {
@@ -141,13 +147,14 @@ object Box64Launcher {
 
         if (isPolytoria2) {
             // enable Polytoria's own touchscreen support and embed subwindows so they stay in the main viewport
+            val renderThread = if (SettingsActivity.isRenderThreadEnabled(ctx)) "driver/threads/thread_model=2\n" else ""
             try {
                 File("$rootPath/polytoria/override.cfg").writeText(
                     "_custom_features=\"touchscreen\"\n\n" +
                     "[debug]\n\nsettings/stdout/verbose_stdout=false\n\n" +
                     "[display]\n\nwindow/subwindows/embed_subwindows=true\n\n" +
                     "[input_devices]\n\npointing/emulate_touch_from_mouse=true\n\n" +
-                    "[rendering]\n\nrenderer/rendering_method=\"mobile\"\nrenderer/rendering_method.mobile=\"mobile\"\n"
+                    "[rendering]\n\n" + renderThread + "renderer/rendering_method=\"mobile\"\nrenderer/rendering_method.mobile=\"mobile\"\n"
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "failed to write override.cfg: ${e.message}")
@@ -211,7 +218,7 @@ object Box64Launcher {
             put("BOX64_DYNAREC", "1")
             if (isPolytoria2) {
                 put("BOX64_DYNAREC_BIGBLOCK", if (safeMode) "0" else if (lowEnd) "1" else "2")
-                put("BOX64_DYNAREC_STRONGMEM", if (safeMode) "2" else "1")
+                put("BOX64_DYNAREC_STRONGMEM", if (safeMode) "2" else if (SettingsActivity.isFastMemoryEnabled(ctx)) "0" else "1")
                 put("BOX64_DYNAREC_WEAKBARRIER", if (safeMode) "0" else "1")
                 put("BOX64_DYNAREC_FASTNAN", if (safeMode) "0" else "1")
                 put("BOX64_DYNAREC_FASTROUND", if (safeMode) "0" else "1")
@@ -314,6 +321,7 @@ object Box64Launcher {
                 else -> (totalRam * 45 / 100).coerceIn(1L shl 30, 3L shl 30)
             }
             put("DOTNET_GCHeapHardLimit", "0x%x".format(gcHeapLimit))
+            if (!lowMem) put("DOTNET_GCRegionRange", "%x".format(gcHeapLimit * 8))
             put("DOTNET_DebugWriteToStdErr", "1")
             put("DOTNET_EnableDiagnostics", "1")
             put("SDL_VIDEODRIVER", "x11")
@@ -344,7 +352,7 @@ object Box64Launcher {
         }
 
         val engineArgs = if (isPolytoria2)
-            "--rendering-driver vulkan --rendering-method mobile --audio-driver ALSA"
+            "--rendering-driver vulkan --rendering-method mobile --audio-driver ALSA --no-crash-reports"
         else
             "-force-vulkan -fullscreen"
         val box64Cmd = "\"$nativeDir/libbox64.so\" \"$rootPath/polytoria/Polytoria Client.x86_64\" $engineArgs$gameArgStr"

@@ -90,6 +90,8 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_PIP = "pip_enabled"
         const val KEY_HAPTIC = "haptic_enabled"
         const val KEY_OVERHEAT_PROTECTION = "overheat_protection"
+        const val KEY_RENDER_THREAD = "render_thread"
+        const val KEY_FAST_MEMORY = "fast_memory"
 
         fun isSafeMode(ctx: Context): Boolean =
             ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_SAFE_MODE, false)
@@ -102,6 +104,12 @@ class SettingsActivity : AppCompatActivity() {
 
         fun isOverheatProtectionEnabled(ctx: Context): Boolean =
             ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_OVERHEAT_PROTECTION, true)
+
+        fun isRenderThreadEnabled(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_RENDER_THREAD, true)
+
+        fun isFastMemoryEnabled(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_FAST_MEMORY, false)
         const val DEFAULT_RESOLUTION = 720
         const val DEFAULT_SENSITIVITY = 3f
 
@@ -693,6 +701,20 @@ class SettingsActivity : AppCompatActivity() {
             prefs.getBoolean(KEY_OVERHEAT_PROTECTION, true)
         ) { checked -> prefs.edit().putBoolean(KEY_OVERHEAT_PROTECTION, checked).apply() }
         perf.addView(overheatRow, layoutParams().apply { topMargin = dp(20) })
+
+        val (renderThreadRow, _) = switchRow(
+            "Separate render thread",
+            "Puts the renderer on its own CPU thread. This increases performance but might cause graphical issues in some devices.",
+            prefs.getBoolean(KEY_RENDER_THREAD, true)
+        ) { checked -> prefs.edit().putBoolean(KEY_RENDER_THREAD, checked).apply() }
+        perf.addView(renderThreadRow, layoutParams().apply { topMargin = dp(20) })
+
+        val (fastMemoryRow, _) = switchRow(
+            "Faster CPU emulation",
+            "Uses fewer memory barriers in Box64. Faster in CPU heavy games but it might cause crashes. 2.0 only and disabled in safe mode.",
+            prefs.getBoolean(KEY_FAST_MEMORY, false)
+        ) { checked -> prefs.edit().putBoolean(KEY_FAST_MEMORY, checked).apply() }
+        perf.addView(fastMemoryRow, layoutParams().apply { topMargin = dp(20) })
 
         content.addView(perfCard, cardParams())
 
