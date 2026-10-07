@@ -1,9 +1,14 @@
 package com.cetotos.polydroid2
 
 import android.app.ActivityManager
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import androidx.core.content.FileProvider
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -11,7 +16,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 object LogReporter {
     private const val TAG = "PolyDroid2"
@@ -51,6 +61,7 @@ object LogReporter {
             .setTitle("Send logs")
             .setSingleChoiceItems(clients.map { it.label }.toTypedArray(), selected) { _, which -> selected = which }
             .setPositiveButton("Send") { _, _ -> send(ctx, clients[selected], note, onProgress, onDone) }
+            .setNeutralButton("Share") { _, _ -> share(ctx, clients[selected], note, onDone) }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -75,19 +86,15 @@ object LogReporter {
                 onProgress("Reading logs…")
                 Thread.sleep(500)
                 val plain = "text/plain".toMediaTypeOrNull()
-                val report = buildReport(ctx, client, note).toByteArray(Charsets.UTF_8)
-                val gameLog = readGameLog(ctx, client).toByteArray(Charsets.UTF_8)
-                val logcat = readLogcat().toByteArray(Charsets.UTF_8)
-                val sessionLog = readSessionLog(ctx).toByteArray(Charsets.UTF_8)
+                val files = collectLogs(ctx, client, note)
 
                 onProgress("Sending…")
-                val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+                val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("content", summary(ctx, client, note))
-                    .addFormDataPart("files[0]", "report.txt", report.toRequestBody(plain))
-                    .addFormDataPart("files[1]", client.logName, gameLog.toRequestBody(plain))
-                    .addFormDataPart("files[2]", "logcat.log", logcat.toRequestBody(plain))
-                    .addFormDataPart("files[3]", "session.log", sessionLog.toRequestBody(plain))
-                    .build()
+                files.forEachIndexed { i, (name, data) ->
+                    builder.addFormDataPart("files[$i]", name, data.toRequestBody(plain))
+                }
+                val body = builder.build()
                 val req = Request.Builder().url(endpoint()).post(body).build()
                 http.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {
@@ -103,6 +110,60 @@ object LogReporter {
             }
         }.start()
     }
+
+    fun share(
+        ctx: Context,
+        client: Client,
+        note: String,
+        onDone: (success: Boolean, msg: String) -> Unit,
+    ) {
+        val main = Handler(Looper.getMainLooper())
+        Thread {
+            try {
+                val files = collectLogs(ctx, client, note)
+                val dir = File(ctx.cacheDir, "shared_logs")
+                dir.deleteRecursively()
+                dir.mkdirs()
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                val zip = File(dir, "polydroid-logs-$stamp.zip")
+                ZipOutputStream(zip.outputStream().buffered()).use { out ->
+                    for ((name, data) in files) {
+                        out.putNextEntry(ZipEntry(name))
+                        out.write(data)
+                        out.closeEntry()
+                    }
+                }
+
+                val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", zip)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, "PolyDroid logs")
+                    putExtra(Intent.EXTRA_TEXT, summary(ctx, client, note))
+                    clipData = ClipData.newRawUri(zip.name, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                main.post {
+                    try {
+                        ctx.startActivity(Intent.createChooser(send, "Share logs"))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "failed to open share: ${e.message}", e)
+                        onDone(false, "Failed with: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to pack logs: ${e.message}", e)
+                main.post { onDone(false, "Failed with: ${e.message}") }
+            }
+        }.start()
+    }
+
+    private fun collectLogs(ctx: Context, client: Client, note: String): List<Pair<String, ByteArray>> = listOf(
+        "report.txt" to buildReport(ctx, client, note).toByteArray(Charsets.UTF_8),
+        client.logName to readGameLog(ctx, client).toByteArray(Charsets.UTF_8),
+        "logcat.log" to readLogcat().toByteArray(Charsets.UTF_8),
+        "session.log" to readSessionLog(ctx).toByteArray(Charsets.UTF_8),
+    )
 
     private fun buildReport(ctx: Context, client: Client, note: String): String {
         val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)

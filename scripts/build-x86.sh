@@ -30,4 +30,4 @@ build godot_audio.c            "$X86_OUT/libasound.so.2"           libasound.so.
 build ctype_fix.c              "$X86_OUT/libctype_fix.so"
 build godot_ctype_fix.c        "$X86_OUT/libgodot_ctype_patch.so"
 build pthread_recursive_fix.c  "$X86_OUT/libpthread_recursive_fix.so"
-build eaccess.c                "$X86_OUT/libeaccess_shim.so"
+build machine_id.c             "$X86_OUT/libmachine_id.so"

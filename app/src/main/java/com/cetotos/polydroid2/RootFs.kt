@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 object RootFs {
     private const val TAG = "PolyDroid2"
     private const val VERSION = 8
-    private const val LIBS_VERSION = 11
+    private const val LIBS_VERSION = 12
 
     private val LIB_ASSETS = listOf(
         "turnip/libvulkan_freedreno.so",
@@ -50,6 +50,7 @@ object RootFs {
         "x86_64-libs/libctype_fix.so",
         "x86_64-libs/libgodot_ctype_patch.so",
         "x86_64-libs/libeaccess_shim.so",
+        "x86_64-libs/libmachine_id.so",
         "x86_64-libs/libXrandr.so.2",
         "x86_64-libs/libXi.so.6",
         "x86_64-libs/libXinerama.so.1",
@@ -433,7 +434,7 @@ object RootFs {
             Log.w(TAG, "libX11_stub.so not found in assets: ${e.message}")
         }
 
-        for (so in listOf("libpthread_recursive_fix.so", "libctype_fix.so", "libgodot_ctype_patch.so", "libeaccess_shim.so", "libXrandr.so.2", "libXi.so.6", "libXinerama.so.1", "libXrender.so.1", "libasound.so.2")) {
+        for (so in listOf("libpthread_recursive_fix.so", "libctype_fix.so", "libgodot_ctype_patch.so", "libeaccess_shim.so", "libmachine_id.so", "libXrandr.so.2", "libXi.so.6", "libXinerama.so.1", "libXrender.so.1", "libasound.so.2")) {
             try {
                 val dest = File(x86LibDir, so)
                 copyAssetCounted(ctx, "x86_64-libs/$so", dest, progress)

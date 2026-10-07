@@ -16,6 +16,7 @@ tasks.named("preBuild") {
             "src/main/assets/x86_64-libs/libgodot_ctype_patch.so",
             "src/main/assets/x86_64-libs/libpthread_recursive_fix.so",
             "src/main/assets/x86_64-libs/libeaccess_shim.so",
+            "src/main/assets/x86_64-libs/libmachine_id.so",
         )
         for (path in required) {
             if (!file(path).exists()) error("Missing pre-built: $path")
@@ -31,8 +32,8 @@ android {
         applicationId = "com.cetotos.polydroid2"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.9.4b"
+        versionCode = 7
+        versionName = "0.9.5b"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
     }

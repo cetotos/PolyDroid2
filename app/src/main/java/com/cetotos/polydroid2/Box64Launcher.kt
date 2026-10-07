@@ -201,6 +201,7 @@ object Box64Launcher {
             val x86Pre = "$rootPath/usr/lib/x86_64-linux-gnu"
             val ldPreload = listOf(
                 "$x86Pre/libeaccess_shim.so",
+                "$x86Pre/libmachine_id.so",
                 "$x86Pre/libpthread_recursive_fix.so",
                 "$x86Pre/libgodot_ctype_patch.so",
                 "$x86Pre/libctype_fix.so",
