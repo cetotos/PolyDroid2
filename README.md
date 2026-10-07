@@ -34,22 +34,16 @@ Login is handled by Google Chrome, and the app no longer requires full file perm
 - Wake lock *(for keeping the screen on mid-game)*
 - Basic internet access *(for the Polytoria Client itself)*
 
-### Why won't it run? I'm stuck on a black screen.
-
-Unlike PolyDroid, PolyDroid 2 is written from scratch. Because it's still in beta, it is not tested on many devices.
-Over time more patches should come out, but it is still very fragile and you still need a good device with a GPU that has good Vulkan support, and a good amount of RAM. *Expect your device to get hot!*
-
 ### Why is it so slow?
 
 To optimize the game, you can lower the graphics settings either in-game or in the in-app settings menu.
 
 Because Unity's Vulkan support is bad and Polytoria itself doesnt have a render distance, looking at a lot of 3D objects in 1.0, even if not visible on screen will tank performance. Heavy games with high part counts will run poorly!
 
-### ~~Will this have 2.0 support?~~ Why not just wait for the real mobile release?
+### Why not just wait for the real mobile release?
 
-*~~Currently, due to Box64's internal architecture being incompatible with NativeAOT (What Godot/2.0 client uses) PolyDroid will probably not have 2.0 support.~~*
-
-**PolyDroid 2 now has 2.0 support!** You can enter any 2.0 game and it will download automatically. It is pretty new, so you may encounter issues. If you do, report them in the issues tab.
+This app was made before the real mobile release was announced, and it is true after 2.0 mobile comes out this app will be mostly abandoned, but 2.0 mobile is still months away.
+Also, PolyDroid 2 can be used for 1.0 mobile until 1.0 games get deleted
 
 ### Credits
 
